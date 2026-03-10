@@ -24,11 +24,24 @@ export async function collectRepoContext(cwd: string): Promise<RepoContext> {
       )
     )
   ).filter((name): name is (typeof GUIDANCE_FILES)[number] => name !== null);
-  const snippets = await Promise.all(
-    guidanceFiles.map(async (path) => ({
-      content: await readSnippet(join(cwd, path)),
-      path
-    }))
+  const snippets = (
+    await Promise.all(
+      guidanceFiles.map(async (path) => {
+        const content = await readSnippet(join(cwd, path));
+
+        if (content === null) {
+          return null;
+        }
+
+        return {
+          content,
+          path
+        };
+      })
+    )
+  ).filter(
+    (snippet): snippet is { content: string; path: (typeof GUIDANCE_FILES)[number] } =>
+      snippet !== null
   );
   const isGitRepo = await hasPath(join(cwd, ".git"));
 
@@ -43,9 +56,22 @@ export async function collectRepoContext(cwd: string): Promise<RepoContext> {
   };
 }
 
-async function readSnippet(path: string): Promise<string> {
-  const contents = await readFile(path, "utf8");
-  return contents.slice(0, MAX_SNIPPET_BYTES);
+async function readSnippet(path: string): Promise<string | null> {
+  try {
+    const contents = await readFile(path, "utf8");
+    return contents.slice(0, MAX_SNIPPET_BYTES);
+  } catch (error) {
+    if (
+      typeof error === "object" &&
+      error !== null &&
+      "code" in error &&
+      (error.code === "ENOENT" || error.code === "EISDIR")
+    ) {
+      return null;
+    }
+
+    throw error;
+  }
 }
 
 function extractPackageScripts(contents: string | undefined): Record<string, string> {

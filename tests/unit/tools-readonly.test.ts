@@ -79,6 +79,20 @@ describe("read-only tools", () => {
       })
     ).rejects.toThrow("Requested path is not a file: `src`.");
   });
+
+  it("returns a normal error when asked to read a missing file", async () => {
+    const cwd = await makeWorkspace();
+    const tool = createReadFileTool({
+      cwd,
+      observe: () => {}
+    });
+
+    await expect(
+      tool.run({
+        path: "README.missing"
+      })
+    ).rejects.toThrow("Requested path was not found: `README.missing`.");
+  });
 });
 
 async function makeWorkspace(): Promise<string> {

@@ -37,13 +37,43 @@ export async function readWorkspaceTextFile(args: {
   path: string;
 }): Promise<string> {
   const resolvedPath = resolveWorkspacePath(args.cwd, args.path);
-  const fileStat = await stat(resolvedPath);
+
+  let fileStat;
+  try {
+    fileStat = await stat(resolvedPath);
+  } catch (error) {
+    if (
+      typeof error === "object" &&
+      error !== null &&
+      "code" in error &&
+      error.code === "ENOENT"
+    ) {
+      throw new Error(`Requested path was not found: \`${args.path}\`.`);
+    }
+
+    throw error;
+  }
 
   if (!fileStat.isFile()) {
     throw new Error(`Requested path is not a file: \`${args.path}\`.`);
   }
 
-  const contents = await readFile(resolvedPath, "utf8");
+  let contents: string;
+  try {
+    contents = await readFile(resolvedPath, "utf8");
+  } catch (error) {
+    if (
+      typeof error === "object" &&
+      error !== null &&
+      "code" in error &&
+      error.code === "ENOENT"
+    ) {
+      throw new Error(`Requested path was not found: \`${args.path}\`.`);
+    }
+
+    throw error;
+  }
+
   return contents.slice(0, args.maxBytes);
 }
 

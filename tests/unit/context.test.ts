@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, rm, unlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -51,6 +51,20 @@ describe("collectRepoContext", () => {
 
     await mkdir(join(cwd, ".git"));
     await mkdir(join(cwd, "README.md"));
+
+    const context = await collectRepoContext(cwd);
+
+    expect(context.guidanceFiles).toEqual([]);
+    expect(context.snippets).toEqual([]);
+  });
+
+  it("ignores guidance files that disappear before snippet reading", async () => {
+    const cwd = await mkdtemp(join(os.tmpdir(), "coding-agent-context-"));
+    tempDirs.push(cwd);
+
+    await mkdir(join(cwd, ".git"));
+    await writeFile(join(cwd, "README.md"), "readme\n", "utf8");
+    await unlink(join(cwd, "README.md"));
 
     const context = await collectRepoContext(cwd);
 
