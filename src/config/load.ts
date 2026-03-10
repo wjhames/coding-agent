@@ -1,6 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { ParsedOptions } from "../cli/parse.js";
+import { getAgentHome } from "../session/paths.js";
 import {
   approvalPolicySchema,
   configSchema,
@@ -8,12 +9,10 @@ import {
   type CodingAgentProfile
 } from "./schema.js";
 
-export const DEFAULT_CONFIG_FILE = ".coding-agent.json";
+export const DEFAULT_CONFIG_FILE = "config.json";
 export const DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1";
-export const DEFAULT_OPENAI_API_KEY_ENV = "OPENAI_API_KEY";
 
 export interface ResolvedExecutionConfig {
-  apiKeyEnv: string | undefined;
   approvalPolicy: CodingAgentProfile["approvalPolicy"];
   baseUrl: string | undefined;
   maxSteps: number | undefined;
@@ -26,10 +25,10 @@ export interface ResolvedExecutionConfig {
 export class ConfigError extends Error {}
 
 export async function loadConfig(
-  cwd: string,
+  homeDir?: string,
   fileName = DEFAULT_CONFIG_FILE
 ): Promise<CodingAgentConfig | null> {
-  const path = join(cwd, fileName);
+  const path = join(getAgentHome(homeDir), fileName);
 
   try {
     const raw = await readFile(path, "utf8");
@@ -53,11 +52,11 @@ export function resolveExecutionConfig(args: {
   config: CodingAgentConfig | null;
 }): ResolvedExecutionConfig {
   const { cliOptions, config } = args;
-  const profileName = cliOptions.profile ?? config?.defaultProfile;
+  const profileName =
+    cliOptions.profile ?? config?.defaultProfile ?? inferSingleProfileName(config);
   const profile = profileName ? readProfile(config, profileName) : undefined;
 
   return {
-    apiKeyEnv: profile?.apiKeyEnv ?? DEFAULT_OPENAI_API_KEY_ENV,
     approvalPolicy:
       normalizeApprovalPolicy(cliOptions.approvalPolicy) ?? profile?.approvalPolicy,
     baseUrl: cliOptions.baseUrl ?? profile?.baseUrl ?? DEFAULT_OPENAI_BASE_URL,
@@ -71,36 +70,47 @@ export function resolveExecutionConfig(args: {
 
 export interface ResolvedLlmConfig {
   apiKey: string;
-  apiKeyEnv: string;
   baseUrl: string;
   model: string;
 }
 
 export function resolveLlmConfig(args: {
+  config: CodingAgentConfig | null;
   executionConfig: ResolvedExecutionConfig;
-  env: NodeJS.ProcessEnv;
 }): ResolvedLlmConfig {
-  const { executionConfig, env } = args;
+  const { executionConfig, config } = args;
 
   if (!executionConfig.model) {
-    throw new ConfigError("A model is required. Set it in `.coding-agent.json` or pass `--model`.");
+    throw new ConfigError(
+      "A model is required. Set it in `~/.coding-agent/config.json` or pass `--model`."
+    );
   }
 
-  const apiKeyEnv = executionConfig.apiKeyEnv ?? DEFAULT_OPENAI_API_KEY_ENV;
-  const apiKey = env[apiKeyEnv];
+  const profile = executionConfig.profileName
+    ? readProfile(config, executionConfig.profileName)
+    : undefined;
+  const apiKey = profile?.apiKey;
 
   if (!apiKey) {
-    throw new ConfigError(
-      `API key env \`${apiKeyEnv}\` is not set.`
-    );
+    throw new ConfigError("An API key is required in `~/.coding-agent/config.json`.");
   }
 
   return {
     apiKey,
-    apiKeyEnv,
     baseUrl: executionConfig.baseUrl ?? DEFAULT_OPENAI_BASE_URL,
     model: executionConfig.model
   };
+}
+
+function inferSingleProfileName(
+  config: CodingAgentConfig | null
+): string | undefined {
+  if (!config) {
+    return undefined;
+  }
+
+  const names = Object.keys(config.profiles);
+  return names.length === 1 ? names[0] : undefined;
 }
 
 function readProfile(

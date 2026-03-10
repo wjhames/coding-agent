@@ -5,6 +5,7 @@ import process from "node:process";
 import { runExec } from "../app/exec.js";
 import { runResume } from "../app/resume.js";
 import { ConfigError } from "../config/load.js";
+import { LlmError } from "../llm/openai.js";
 import { SessionStoreError } from "../session/store.js";
 import { renderExecHelp, renderResumeHelp, renderRootHelp } from "./help.js";
 import {
@@ -17,7 +18,11 @@ import { CliUsageError, parseCliArgs } from "./parse.js";
 export async function runCli(
   argv: string[],
   io: CliIO = { stdout: process.stdout, stderr: process.stderr },
-  runtime: { processCwd?: string; sessionHomeDir?: string } = {}
+  runtime: {
+    fetchImpl?: typeof fetch;
+    processCwd?: string;
+    sessionHomeDir?: string;
+  } = {}
 ): Promise<number> {
   const wantsJson = argv.includes("--json");
 
@@ -73,6 +78,7 @@ export async function runCli(
       }
 
       const result = await runExec({
+        fetchImpl: runtime.fetchImpl,
         options: invocation.options,
         processCwd: runtime.processCwd,
         prompt: invocation.prompt,
@@ -123,6 +129,10 @@ export async function runCli(
           ? "usage_error"
           : error instanceof ConfigError
             ? "config_error"
+            : error instanceof LlmError
+              ? "llm_error"
+              : error instanceof TypeError
+                ? "network_error"
             : error instanceof SessionStoreError
               ? "session_error"
               : "cli_error",

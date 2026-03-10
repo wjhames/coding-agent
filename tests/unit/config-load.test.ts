@@ -1,4 +1,4 @@
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -18,21 +18,22 @@ describe("config loading", () => {
   });
 
   it("returns null when the config file does not exist", async () => {
-    const cwd = await makeTempDir();
+    const homeDir = await makeTempDir();
 
-    await expect(loadConfig(cwd)).resolves.toBeNull();
+    await expect(loadConfig(homeDir)).resolves.toBeNull();
   });
 
   it("loads a valid config file", async () => {
-    const cwd = await makeTempDir();
-
+    const homeDir = await makeTempDir();
+    const configDir = join(homeDir, ".coding-agent");
+    await mkdir(configDir, { recursive: true });
     await writeFile(
-      join(cwd, ".coding-agent.json"),
+      join(configDir, "config.json"),
       JSON.stringify({
         defaultProfile: "local",
         profiles: {
           local: {
-            apiKeyEnv: "OPENAI_API_KEY",
+            apiKey: "secret",
             approvalPolicy: "prompt",
             baseUrl: "http://localhost:1234/v1",
             maxSteps: 8,
@@ -43,11 +44,11 @@ describe("config loading", () => {
       "utf8"
     );
 
-    await expect(loadConfig(cwd)).resolves.toEqual({
+    await expect(loadConfig(homeDir)).resolves.toEqual({
       defaultProfile: "local",
       profiles: {
         local: {
-          apiKeyEnv: "OPENAI_API_KEY",
+          apiKey: "secret",
           approvalPolicy: "prompt",
           baseUrl: "http://localhost:1234/v1",
           maxSteps: 8,
@@ -58,10 +59,12 @@ describe("config loading", () => {
   });
 
   it("rejects invalid config", async () => {
-    const cwd = await makeTempDir();
-    await writeFile(join(cwd, ".coding-agent.json"), "{\"profiles\":[]}", "utf8");
+    const homeDir = await makeTempDir();
+    const configDir = join(homeDir, ".coding-agent");
+    await mkdir(configDir, { recursive: true });
+    await writeFile(join(configDir, "config.json"), "{\"profiles\":[]}", "utf8");
 
-    await expect(loadConfig(cwd)).rejects.toBeInstanceOf(ConfigError);
+    await expect(loadConfig(homeDir)).rejects.toBeInstanceOf(ConfigError);
   });
 
   it("resolves cli overrides before profile values", () => {
@@ -87,7 +90,7 @@ describe("config loading", () => {
           defaultProfile: "local",
           profiles: {
             local: {
-              apiKeyEnv: "OPENAI_API_KEY",
+              apiKey: "secret",
               approvalPolicy: "prompt",
               baseUrl: "http://localhost:1234/v1",
               maxSteps: 8,
@@ -99,7 +102,6 @@ describe("config loading", () => {
         }
       })
     ).toEqual({
-      apiKeyEnv: "OPENAI_API_KEY",
       approvalPolicy: "auto",
       baseUrl: "http://localhost:5678/v1",
       maxSteps: 4,
@@ -109,10 +111,43 @@ describe("config loading", () => {
       timeout: "5m"
     });
   });
+
+  it("infers the only profile when no default is set", () => {
+    expect(
+      resolveExecutionConfig({
+        cliOptions: baseOptions(),
+        config: {
+          profiles: {
+            local: {
+              apiKey: "secret",
+              model: "gpt-4.1-mini"
+            }
+          }
+        }
+      }).profileName
+    ).toBe("local");
+  });
 });
 
 async function makeTempDir(): Promise<string> {
   const dir = await mkdtemp(join(os.tmpdir(), "coding-agent-config-"));
   tempDirs.push(dir);
   return dir;
+}
+
+function baseOptions(): ParsedOptions {
+  return {
+    approvalPolicy: undefined,
+    baseUrl: undefined,
+    cwd: undefined,
+    help: false,
+    json: false,
+    maxSteps: undefined,
+    model: undefined,
+    output: undefined,
+    profile: undefined,
+    quiet: false,
+    timeout: undefined,
+    verbose: false
+  };
 }

@@ -4,7 +4,7 @@ export const approvalPolicySchema = z.enum(["auto", "prompt", "never"]);
 
 export const profileSchema = z
   .object({
-    apiKeyEnv: z.string().min(1).optional(),
+    apiKey: z.string().min(1).optional(),
     approvalPolicy: approvalPolicySchema.optional(),
     baseUrl: z.string().url().optional(),
     maxSteps: z.number().int().positive().optional(),

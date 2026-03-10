@@ -15,17 +15,22 @@ describe("resolveLlmConfig", () => {
 
     expect(
       resolveLlmConfig({
+        config: {
+          defaultProfile: "local",
+          profiles: {
+            local: {
+              apiKey: "secret"
+            }
+          }
+        },
         executionConfig: {
           ...executionConfig,
+          profileName: "local",
           model: "gpt-4.1-mini"
-        },
-        env: {
-          OPENAI_API_KEY: "secret"
         }
       })
     ).toEqual({
       apiKey: "secret",
-      apiKeyEnv: "OPENAI_API_KEY",
       baseUrl: "https://api.openai.com/v1",
       model: "gpt-4.1-mini"
     });
@@ -34,28 +39,43 @@ describe("resolveLlmConfig", () => {
   it("rejects a missing model", () => {
     expect(() =>
       resolveLlmConfig({
+        config: {
+          defaultProfile: "local",
+          profiles: {
+            local: {
+              apiKey: "secret"
+            }
+          }
+        },
         executionConfig: resolveExecutionConfig({
           cliOptions: baseOptions(),
           config: null
-        }),
-        env: {
-          OPENAI_API_KEY: "secret"
-        }
+        })
       })
     ).toThrow(ConfigError);
   });
 
-  it("rejects a missing API key env", () => {
+  it("rejects a missing API key", () => {
     expect(() =>
       resolveLlmConfig({
+        config: {
+          defaultProfile: "local",
+          profiles: {
+            local: {}
+          }
+        },
         executionConfig: {
           ...resolveExecutionConfig({
             cliOptions: baseOptions(),
-            config: null
+            config: {
+              defaultProfile: "local",
+              profiles: {
+                local: {}
+              }
+            }
           }),
           model: "gpt-4.1-mini"
-        },
-        env: {}
+        }
       })
     ).toThrow(ConfigError);
   });

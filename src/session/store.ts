@@ -14,7 +14,6 @@ export const sessionRecordSchema = z
     changedFiles: z.array(z.string()),
     config: z
       .object({
-        apiKeyEnv: z.string().optional(),
         approvalPolicy: z.enum(["auto", "prompt", "never"]).optional(),
         baseUrl: z.string().url().optional(),
         maxSteps: z.number().int().positive().optional(),
