@@ -235,3 +235,76 @@ export interface CommandError {
   exitCode: 1 | 2;
   sessionId?: string | null;
 }
+
+export type RuntimeEvent =
+  | {
+      at: string;
+      detail?: string | undefined;
+      status:
+        | "completed"
+        | "editing"
+        | "failed"
+        | "idle"
+        | "paused"
+        | "planning"
+        | "reading"
+        | "resuming"
+        | "verifying";
+      type: "status";
+    }
+  | {
+      at: string;
+      plan: PlanState | null;
+      type: "plan_updated";
+    }
+  | {
+      at: string;
+      inputSummary: string;
+      tool: ToolName;
+      type: "tool_called";
+    }
+  | {
+      artifacts?: Artifact[] | undefined;
+      at: string;
+      changedFiles?: string[] | undefined;
+      error?: string | undefined;
+      observation?: Observation | undefined;
+      tool: ToolName;
+      type: "tool_result";
+    }
+  | {
+      approval: Approval;
+      at: string;
+      pendingAction: PendingAction;
+      type: "approval_requested";
+    }
+  | {
+      approvalId: string;
+      at: string;
+      status: "approved" | "rejected";
+      type: "approval_resolved";
+    }
+  | {
+      at: string;
+      commands: string[];
+      type: "verification_started";
+    }
+  | {
+      at: string;
+      type: "verification_completed";
+      verification: VerificationSummary;
+    }
+  | {
+      at: string;
+      text: string;
+      type: "assistant_message";
+    }
+  | {
+      at: string;
+      result: CommandResult;
+      type: "run_finished";
+    };
+
+export interface RuntimeObserver {
+  onEvent: (event: RuntimeEvent) => void;
+}

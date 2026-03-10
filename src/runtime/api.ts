@@ -1,5 +1,5 @@
 import type { ParsedOptions } from "../cli/parse.js";
-import type { CommandResult } from "./contracts.js";
+import type { CommandResult, RuntimeObserver } from "./contracts.js";
 import { loadConfig, resolveExecutionConfig, resolveLlmConfig } from "../config/load.js";
 import { runExec } from "../app/exec.js";
 import { runResume } from "../app/resume.js";
@@ -23,10 +23,12 @@ export interface RuntimeDoctor {
 export async function startTask(args: {
   environment?: RuntimeEnvironment;
   options: ParsedOptions;
+  observer: RuntimeObserver | undefined;
   prompt: string;
 }): Promise<CommandResult> {
   return runExec({
     fetchImpl: args.environment?.fetchImpl,
+    observer: args.observer,
     options: args.options,
     processCwd: args.environment?.processCwd,
     prompt: args.prompt,
@@ -37,10 +39,12 @@ export async function startTask(args: {
 export async function resumeTask(args: {
   environment?: RuntimeEnvironment;
   options: ParsedOptions;
+  observer: RuntimeObserver | undefined;
   sessionId?: string;
 }): Promise<CommandResult | null> {
   return runResume({
     fetchImpl: args.environment?.fetchImpl,
+    observer: args.observer,
     options: args.options,
     sessionHomeDir: args.environment?.sessionHomeDir,
     sessionId: args.sessionId
@@ -50,6 +54,7 @@ export async function resumeTask(args: {
 export async function approveTask(args: {
   decision: "approve" | "reject";
   environment?: RuntimeEnvironment;
+  observer: RuntimeObserver | undefined;
   options: ParsedOptions;
   sessionId: string;
 }): Promise<CommandResult | null> {
@@ -61,6 +66,7 @@ export async function approveTask(args: {
 
   return runResume({
     fetchImpl: args.environment?.fetchImpl,
+    observer: args.observer,
     options: {
       ...args.options,
       approvalPolicy: args.decision === "approve" ? "auto" : "never"

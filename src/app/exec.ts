@@ -9,6 +9,7 @@ import type {
   Observation,
   PlanState,
   RepoContextSummary,
+  RuntimeObserver,
   VerificationSummary
 } from "../cli/output.js";
 import { ApprovalDeniedError, ApprovalRequiredError, type PendingAction } from "./approval.js";
@@ -71,6 +72,7 @@ interface RuntimeState {
 
 export async function runExec(args: {
   fetchImpl: typeof fetch | undefined;
+  observer: RuntimeObserver | undefined;
   options: ParsedOptions;
   prompt: string;
   processCwd: string | undefined;
@@ -81,6 +83,7 @@ export async function runExec(args: {
     cwd,
     existingSession: null,
     fetchImpl: args.fetchImpl,
+    observer: args.observer,
     options: args.options,
     prompt: args.prompt,
     sessionHomeDir: args.sessionHomeDir
@@ -89,6 +92,7 @@ export async function runExec(args: {
 
 export async function continueExec(args: {
   fetchImpl: typeof fetch | undefined;
+  observer: RuntimeObserver | undefined;
   options: ParsedOptions;
   session: SessionRecord;
   sessionHomeDir: string | undefined;
@@ -171,9 +175,16 @@ export async function continueExec(args: {
   }
 
   const state = createRuntimeState(args.session);
+  emitRuntimeEvent(args.observer, {
+    at: new Date().toISOString(),
+    detail: `Resuming session ${args.session.id}`,
+    status: "resuming",
+    type: "status"
+  });
   await executePendingAction({
     config: resolvedConfig,
     cwd: args.session.cwd,
+    observer: args.observer,
     state
   });
 
@@ -181,6 +192,7 @@ export async function continueExec(args: {
     cwd: args.session.cwd,
     existingSession: args.session,
     fetchImpl: args.fetchImpl,
+    observer: args.observer,
     options: args.options,
     prompt: buildResumePrompt(args.session),
     sessionHomeDir: args.sessionHomeDir,
@@ -192,6 +204,7 @@ async function executeTask(args: {
   cwd: string;
   existingSession: SessionRecord | null;
   fetchImpl: typeof fetch | undefined;
+  observer: RuntimeObserver | undefined;
   options: ParsedOptions;
   prompt: string;
   sessionHomeDir: string | undefined;
@@ -268,10 +281,17 @@ async function executeTask(args: {
   });
 
   try {
+    emitRuntimeEvent(args.observer, {
+      at: new Date().toISOString(),
+      detail: "Preparing model loop",
+      status: "planning",
+      type: "status"
+    });
     const initialSummary = await runModelLoop({
       client,
       config: resolvedConfig,
       cwd: args.cwd,
+      observer: args.observer,
       prompt: args.prompt,
       guidance,
       readOnlyTask,
@@ -283,21 +303,44 @@ async function executeTask(args: {
     let summary = initialSummary;
 
     if (state.changedFiles.size > 0 && verificationCommands.length > 0) {
+      emitRuntimeEvent(args.observer, {
+        at: new Date().toISOString(),
+        detail: verificationCommands.join(", "),
+        status: "verifying",
+        type: "status"
+      });
       state.events.push(createVerificationStartedEvent(verificationCommands));
+      emitRuntimeEvent(args.observer, {
+        at: new Date().toISOString(),
+        commands: verificationCommands,
+        type: "verification_started"
+      });
       state.verification = await runVerificationCommands({
         commands: verificationCommands,
         cwd: args.cwd,
         skippedCommands: verificationPlan.skippedCommands
       });
       state.events.push(createVerificationCompletedEvent(state.verification));
+      emitRuntimeEvent(args.observer, {
+        at: new Date().toISOString(),
+        type: "verification_completed",
+        verification: state.verification
+      });
       appendVerificationObservations(state);
       syncDerivedState(state);
 
       if (!state.verification.passed) {
+        emitRuntimeEvent(args.observer, {
+          at: new Date().toISOString(),
+          detail: "Repairing after failed verification",
+          status: "editing",
+          type: "status"
+        });
         summary = await runModelLoop({
           client,
           config: resolvedConfig,
           cwd: args.cwd,
+          observer: args.observer,
           prompt: buildVerificationFailurePrompt({
             originalPrompt: args.prompt,
             state
@@ -309,12 +352,22 @@ async function executeTask(args: {
           verificationCommands
         });
         state.events.push(createVerificationStartedEvent(verificationCommands));
+        emitRuntimeEvent(args.observer, {
+          at: new Date().toISOString(),
+          commands: verificationCommands,
+          type: "verification_started"
+        });
         state.verification = await runVerificationCommands({
           commands: verificationCommands,
           cwd: args.cwd,
           skippedCommands: verificationPlan.skippedCommands
         });
         state.events.push(createVerificationCompletedEvent(state.verification));
+        emitRuntimeEvent(args.observer, {
+          at: new Date().toISOString(),
+          type: "verification_completed",
+          verification: state.verification
+        });
         appendVerificationObservations(state);
         syncDerivedState(state);
       }
@@ -393,8 +446,23 @@ async function executeTask(args: {
         verification: state.verification
       }
     });
-
-    return resultFromSession(persisted);
+    const result = resultFromSession(persisted);
+    emitRuntimeEvent(args.observer, {
+      at: new Date().toISOString(),
+      status,
+      type: "status"
+    });
+    emitRuntimeEvent(args.observer, {
+      at: new Date().toISOString(),
+      text: finalSummary,
+      type: "assistant_message"
+    });
+    emitRuntimeEvent(args.observer, {
+      at: new Date().toISOString(),
+      result,
+      type: "run_finished"
+    });
+    return result;
   } catch (error) {
     if (error instanceof ApprovalRequiredError) {
       state.pendingAction = error.action;
@@ -405,6 +473,12 @@ async function executeTask(args: {
           pendingAction: error.action
         })
       );
+      emitRuntimeEvent(args.observer, {
+        approval: error.approval,
+        at: new Date().toISOString(),
+        pendingAction: error.action,
+        type: "approval_requested"
+      });
       syncDerivedState(state);
       state.events.push(
         createSummaryUpdatedEvent({
@@ -447,8 +521,19 @@ async function executeTask(args: {
           verification: state.verification
         }
       });
-
-      return resultFromSession(pausedSession);
+      const result = resultFromSession(pausedSession);
+      emitRuntimeEvent(args.observer, {
+        at: new Date().toISOString(),
+        detail: error.approval.summary,
+        status: "paused",
+        type: "status"
+      });
+      emitRuntimeEvent(args.observer, {
+        at: new Date().toISOString(),
+        result,
+        type: "run_finished"
+      });
+      return result;
     }
 
     if (error instanceof Error) {
@@ -492,8 +577,19 @@ async function executeTask(args: {
           verification: state.verification
         }
       });
-
-      return resultFromSession(failedSession);
+      const result = resultFromSession(failedSession);
+      emitRuntimeEvent(args.observer, {
+        at: new Date().toISOString(),
+        detail: error.message,
+        status: "failed",
+        type: "status"
+      });
+      emitRuntimeEvent(args.observer, {
+        at: new Date().toISOString(),
+        result,
+        type: "run_finished"
+      });
+      return result;
     }
 
     throw error;
@@ -504,6 +600,7 @@ async function runModelLoop(args: {
   client: ReturnType<typeof createOpenAICompatibleClient>;
   config: ResolvedExecutionConfig;
   cwd: string;
+  observer: RuntimeObserver | undefined;
   prompt: string;
   guidance: LoadedGuidance;
   readOnlyTask: boolean;
@@ -514,6 +611,7 @@ async function runModelLoop(args: {
   const tools = createRuntimeTools({
     config: args.config,
     cwd: args.cwd,
+    observer: args.observer,
     state: args.state,
     verificationCommands: args.verificationCommands
   });
@@ -545,6 +643,7 @@ async function runModelLoop(args: {
 function createRuntimeTools(args: {
   config: ResolvedExecutionConfig;
   cwd: string;
+  observer: RuntimeObserver | undefined;
   state: RuntimeState;
   verificationCommands: string[];
 }): LlmTool[] {
@@ -554,6 +653,11 @@ function createRuntimeTools(args: {
       setPlan: (nextPlan) => {
         args.state.plan = nextPlan;
         args.state.events.push(createPlanUpdatedEvent(nextPlan));
+        emitRuntimeEvent(args.observer, {
+          at: new Date().toISOString(),
+          plan: nextPlan,
+          type: "plan_updated"
+        });
         syncDerivedState(args.state);
       }
     }),
@@ -614,6 +718,7 @@ function createRuntimeTools(args: {
     })
   ].map((tool) =>
     wrapToolWithEvents({
+      observer: args.observer,
       state: args.state,
       tool
     })
@@ -621,6 +726,7 @@ function createRuntimeTools(args: {
 }
 
 function wrapToolWithEvents(args: {
+  observer: RuntimeObserver | undefined;
   state: RuntimeState;
   tool: LlmTool;
 }): LlmTool {
@@ -633,6 +739,13 @@ function wrapToolWithEvents(args: {
           tool: normalizeToolName(args.tool.name)
         })
       );
+      emitRuntimeEvent(args.observer, {
+        at: new Date().toISOString(),
+        inputSummary: summarizeToolInput(input),
+        tool: normalizeToolName(args.tool.name),
+        type: "tool_called"
+      });
+      emitToolStatus(args.observer, args.tool.name, input);
       const beforeObservationCount = args.state.observations.length;
       const beforeArtifactCount = args.state.artifacts.length;
       const beforeChangedFiles = new Set(args.state.changedFiles);
@@ -666,6 +779,13 @@ function wrapToolWithEvents(args: {
           })
         );
         syncDerivedState(args.state);
+        emitRuntimeEvent(args.observer, {
+          at: new Date().toISOString(),
+          error: message,
+          ...(observation ? { observation } : {}),
+          tool: normalizeToolName(args.tool.name),
+          type: "tool_result"
+        });
 
         return JSON.stringify({
           ok: false,
@@ -690,6 +810,16 @@ function wrapToolWithEvents(args: {
         })
       );
       syncDerivedState(args.state);
+      emitRuntimeEvent(args.observer, {
+        ...(args.state.observations.length > beforeObservationCount && latestObservation
+          ? { observation: latestObservation }
+          : {}),
+        ...(newArtifacts.length > 0 ? { artifacts: newArtifacts } : {}),
+        ...(newChangedFiles.length > 0 ? { changedFiles: newChangedFiles } : {}),
+        at: new Date().toISOString(),
+        tool: normalizeToolName(args.tool.name),
+        type: "tool_result"
+      });
       return result;
     }
   };
@@ -698,6 +828,7 @@ function wrapToolWithEvents(args: {
 async function executePendingAction(args: {
   config: ResolvedExecutionConfig;
   cwd: string;
+  observer: RuntimeObserver | undefined;
   state: RuntimeState;
 }): Promise<void> {
   if (args.state.pendingAction === null) {
@@ -711,6 +842,12 @@ async function executePendingAction(args: {
       status: "approved"
     })
   );
+  emitRuntimeEvent(args.observer, {
+    approvalId,
+    at: new Date().toISOString(),
+    status: "approved",
+    type: "approval_resolved"
+  });
   args.state.approvals = args.state.approvals.map((approval) =>
     approval.id === approvalId ? { ...approval, status: "approved" as const } : approval
   );
@@ -779,6 +916,33 @@ function createRuntimeState(source: {
     plan: source.plan,
     verification: source.verification
   };
+}
+
+function emitRuntimeEvent(observer: RuntimeObserver | undefined, event: Parameters<RuntimeObserver["onEvent"]>[0]): void {
+  observer?.onEvent(event);
+}
+
+function emitToolStatus(
+  observer: RuntimeObserver | undefined,
+  toolName: string,
+  input: unknown
+): void {
+  const tool = normalizeToolName(toolName);
+  const detail = summarizeToolInput(input);
+  const status =
+    tool === "apply_patch"
+      ? "editing"
+      : tool === "run_shell"
+        ? "verifying"
+        : tool === "write_plan"
+          ? "planning"
+          : "reading";
+  emitRuntimeEvent(observer, {
+    at: new Date().toISOString(),
+    detail,
+    status,
+    type: "status"
+  });
 }
 
 function buildSystemPrompt(args: {

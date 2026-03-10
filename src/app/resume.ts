@@ -1,4 +1,4 @@
-import type { CommandResult } from "../cli/output.js";
+import type { CommandResult, RuntimeObserver } from "../cli/output.js";
 import { continueExec } from "./exec.js";
 import { resultFromSession } from "./result.js";
 import { listRecentSessions, loadSession } from "../session/store.js";
@@ -6,6 +6,7 @@ import type { ParsedOptions } from "../cli/parse.js";
 
 export async function runResume(args: {
   fetchImpl: typeof fetch | undefined;
+  observer: RuntimeObserver | undefined;
   options: ParsedOptions;
   sessionHomeDir: string | undefined;
   sessionId: string | undefined;
@@ -27,6 +28,7 @@ export async function runResume(args: {
 
   const result = await continueExec({
     fetchImpl: args.fetchImpl,
+    observer: args.observer,
     options: args.options,
     session,
     sessionHomeDir: args.sessionHomeDir

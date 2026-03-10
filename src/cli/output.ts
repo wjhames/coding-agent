@@ -17,6 +17,8 @@ export type {
   PlanItem,
   PlanState,
   RepoContextSummary,
+  RuntimeEvent,
+  RuntimeObserver,
   SessionConfig,
   SessionMode,
   SessionStatus,
