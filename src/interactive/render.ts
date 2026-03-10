@@ -10,24 +10,55 @@ const YELLOW = "\x1b[33m";
 const USER_BG = "\x1b[48;5;236m";
 const USER_FG = "\x1b[38;5;255m";
 const DETAIL_BG = "\x1b[48;5;235m";
+const INPUT_BG = "\x1b[48;5;234m";
+const INPUT_FG = "\x1b[38;5;252m";
+
+export interface InteractiveFrame {
+  cursor: { column: number; row: number } | null;
+  screen: string;
+  showCursor: boolean;
+}
 
 export function renderInteractiveScreen(args: {
   columns: number;
   rows: number;
   state: InteractiveState;
 }): string {
+  return renderInteractiveFrame(args).screen;
+}
+
+export function renderInteractiveFrame(args: {
+  columns: number;
+  rows: number;
+  state: InteractiveState;
+}): InteractiveFrame {
   const width = Math.max(args.columns, 80);
   const height = Math.max(args.rows, 20);
   const footer = renderFooter(args.state, width);
   const transcriptHeight = Math.max(6, height - footer.length);
   const transcript = renderTranscript(args.state, width, transcriptHeight);
   const screen = [...transcript, ...footer];
+  const showCursor = args.state.mode === "home";
+  const cursor = showCursor
+    ? {
+        column: Math.min(width, 3 + args.state.input.length),
+        row: transcriptHeight + 1
+      }
+    : null;
 
   if (args.state.mode === "details") {
-    return overlayDetails(padToHeight(screen, height, width), args.state, width).join("\n");
+    return {
+      cursor: null,
+      screen: overlayDetails(padToHeight(screen, height, width), args.state, width).join("\n"),
+      showCursor: false
+    };
   }
 
-  return padToHeight(screen, height, width).join("\n");
+  return {
+    cursor,
+    screen: padToHeight(screen, height, width).join("\n"),
+    showCursor
+  };
 }
 
 function renderTranscript(state: InteractiveState, width: number, height: number): string[] {
@@ -59,34 +90,39 @@ function renderEntry(
   const prefix = entryPrefix(entry.kind, args.selected);
   const wrapped = lines.map((line, index) => {
     const lead = index === 0 ? prefix : "  ";
-    return truncateAnsi(`${lead}${line}`, args.width);
+    return truncateAnsi(`${lead}${line}${prefix.length > 0 ? RESET : ""}`, args.width);
   });
 
   return wrapped;
 }
 
 function renderFooter(state: InteractiveState, width: number): string[] {
-  const inputLine =
+  const placeholder =
     state.mode === "running"
-      ? `${DIM}>${RESET} ${state.input.length > 0 ? state.input : ""}`
-      : `> ${state.input}`;
+      ? "Agent is working..."
+      : state.mode === "approval"
+        ? "Approval required"
+        : state.recentSessions.length > 0
+          ? "Type a task. Enter on empty input resumes latest session."
+          : "Type a task";
+  const inputText =
+    state.input.length > 0 ? state.input : `${DIM}${placeholder}${RESET}`;
   const statusBits = [
     `status:${statusColor(state.runtimeStatus)}${state.runtimeStatus}${RESET}`,
     state.profileName ? `profile:${state.profileName}` : null,
     state.doctor?.model ? `model:${state.doctor.model}` : null,
     state.currentRun ? "agent:active" : "agent:ready",
-    state.transcriptScroll > 0 ? `scroll:+${state.transcriptScroll}` : null
+    state.transcriptScroll > 0 ? `scroll:+${state.transcriptScroll}` : null,
+    state.mode === "approval" ? "Up/Down choose" : null,
+    state.mode === "approval" ? "Enter confirm" : null,
+    state.mode === "approval" ? "Esc cancel" : null,
+    state.mode !== "approval" && state.transcriptScroll > 0 ? "End follow" : null,
+    state.footerMessage ? state.footerMessage : null
   ].filter(Boolean);
-  const hintLine =
-    state.mode === "approval"
-      ? "Up/Down choose  Enter confirm  Esc cancel"
-      : "Enter submit  Up/Down scroll  d details  Ctrl+C quit";
 
   return [
-    "-".repeat(width),
-    truncateAnsi(inputLine, width),
-    truncateAnsi(`${DIM}${statusBits.join("  ")}${RESET}`, width),
-    truncateAnsi(state.footerMessage ?? hintLine, width)
+    colorBlock(padText(`> ${inputText}`, width), `${INPUT_BG}${INPUT_FG}`),
+    truncateAnsi(`${DIM}${statusBits.join("  ")}${RESET}`, width)
   ];
 }
 
@@ -116,24 +152,23 @@ function overlayDetails(baseLines: string[], state: InteractiveState, width: num
 }
 
 function entryPrefix(kind: TranscriptEntry["kind"], _selected: boolean): string {
-  const marker = " ";
   switch (kind) {
     case "assistant":
-      return `${marker} `;
+      return "";
     case "approval":
-      return `${marker}${YELLOW}!${RESET} `;
+      return `${YELLOW}>${RESET} `;
     case "plan":
-      return `${marker}${CYAN}~${RESET} `;
+      return `${CYAN}>${RESET} `;
     case "status":
-      return `${marker}${DIM}.${RESET} `;
+      return `${DIM}`;
     case "system":
-      return `${marker}${DIM}:${RESET} `;
+      return `${DIM}`;
     case "tool":
-      return `${marker}${CYAN}>${RESET} `;
+      return `${CYAN}>${RESET} `;
     case "verification":
-      return `${marker}${YELLOW}*${RESET} `;
+      return `${YELLOW}>${RESET} `;
     case "user":
-      return `${marker} `;
+      return "";
   }
 }
 
@@ -163,8 +198,11 @@ function wrapText(text: string, width: number): string[] {
 
     let remaining = line;
     while (remaining.length > width) {
-      output.push(remaining.slice(0, width));
-      remaining = remaining.slice(width);
+      const candidate = remaining.slice(0, width + 1);
+      const breakAt = candidate.lastIndexOf(" ");
+      const splitAt = breakAt > Math.floor(width * 0.5) ? breakAt : width;
+      output.push(remaining.slice(0, splitAt));
+      remaining = remaining.slice(splitAt).trimStart();
     }
     output.push(remaining);
   }

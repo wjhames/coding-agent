@@ -7,7 +7,7 @@ import type { ParsedOptions } from "../cli/parse.js";
 import type { SessionRecord } from "../session/store.js";
 import { applyCommandResult, applyRuntimeEvent, createInitialInteractiveState } from "./state.js";
 import type { InteractiveState } from "./state.js";
-import { renderInteractiveScreen } from "./render.js";
+import { renderInteractiveFrame } from "./render.js";
 
 export async function runInteractiveApp(args: {
   io?: CliIO;
@@ -40,17 +40,46 @@ export async function runInteractiveApp(args: {
   readline.emitKeypressEvents(stdin);
   stdin.setRawMode(true);
   stdin.resume();
-  stdout.write("\x1b[?1049h\x1b[?25l");
+  stdout.write("\x1b[?1049h");
+
+  let lastColumns = terminal.columns;
+  let lastRows = terminal.rows;
+  let lastScreen = "";
+  let renderQueued = false;
+
+  const renderNow = () => {
+    const frame = renderInteractiveFrame({
+      columns: terminal.columns,
+      rows: terminal.rows,
+      state
+    });
+    const resized = terminal.columns !== lastColumns || terminal.rows !== lastRows;
+    const changed = resized || frame.screen !== lastScreen;
+    const cursorCommand =
+      frame.showCursor && frame.cursor
+        ? `\x1b[?25h\x1b[${frame.cursor.row};${frame.cursor.column}H`
+        : "\x1b[?25l";
+
+    if (!changed) {
+      stdout.write(cursorCommand);
+      return;
+    }
+
+    stdout.write(`${resized ? "\x1b[2J" : ""}\x1b[H${frame.screen}${cursorCommand}`);
+    lastColumns = terminal.columns;
+    lastRows = terminal.rows;
+    lastScreen = frame.screen;
+  };
 
   const render = () => {
-    stdout.write("\x1b[2J\x1b[H");
-    stdout.write(
-      renderInteractiveScreen({
-        columns: terminal.columns,
-        rows: terminal.rows,
-        state
-      })
-    );
+    if (renderQueued) {
+      return;
+    }
+    renderQueued = true;
+    setImmediate(() => {
+      renderQueued = false;
+      renderNow();
+    });
   };
 
   const applyEvent = (event: RuntimeEvent) => {
@@ -298,15 +327,27 @@ export async function runInteractiveApp(args: {
       return;
     }
 
-    if (key.name === "up" || key.name === "down") {
+    if (
+      key.name === "up" ||
+      key.name === "down" ||
+      key.name === "pageup" ||
+      key.name === "pagedown" ||
+      key.name === "end"
+    ) {
+      const delta =
+        key.name === "up"
+          ? 1
+          : key.name === "down"
+            ? -1
+            : key.name === "pageup"
+              ? 10
+              : key.name === "pagedown"
+                ? -10
+                : 0;
       state = {
         ...state,
-        selectedTranscriptIndex: clamp(
-          state.selectedTranscriptIndex + (key.name === "up" ? -1 : 1),
-          0,
-          Math.max(0, state.transcript.length - 1)
-        ),
-        transcriptScroll: clamp(state.transcriptScroll + (key.name === "up" ? 1 : -1), 0, 10_000)
+        selectedTranscriptIndex: Math.max(0, state.transcript.length - 1),
+        transcriptScroll: key.name === "end" ? 0 : clamp(state.transcriptScroll + delta, 0, 10_000)
       };
       render();
       return;
@@ -353,6 +394,7 @@ export async function runInteractiveApp(args: {
     }
     cleanedUp = true;
     stdin.off("keypress", onKeypress);
+    terminal.off("resize", render);
     stdin.setRawMode(false);
     stdout.write("\x1b[?25h\x1b[?1049l");
     if (state.sessionId) {
@@ -361,6 +403,7 @@ export async function runInteractiveApp(args: {
   };
 
   stdin.on("keypress", onKeypress);
+  terminal.on("resize", render);
   render();
 
   return await new Promise<number>((resolvePromise) => {

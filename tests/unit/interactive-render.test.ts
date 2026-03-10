@@ -48,5 +48,6 @@ describe("interactive render", () => {
     expect(screen).toContain("status:");
     expect(screen).toContain("profile:local");
     expect(screen).toContain("Ready.");
+    expect(screen).toContain("Type a task");
   });
 });

@@ -2,6 +2,17 @@ import { describe, expect, it } from "vitest";
 import { applyCommandResult, applyRuntimeEvent, createInitialInteractiveState } from "../../src/interactive/state.js";
 
 describe("interactive state", () => {
+  it("starts with an empty transcript and compact input-first shell", () => {
+    const state = createInitialInteractiveState({
+      cwd: "/workspace/project",
+      doctor: null,
+      recentSessions: []
+    });
+
+    expect(state.transcript).toEqual([]);
+    expect(state.footerMessage).toBeNull();
+  });
+
   it("tracks runtime events into transcript and current plan", () => {
     let state = createInitialInteractiveState({
       cwd: "/workspace/project",
@@ -101,5 +112,38 @@ describe("interactive state", () => {
     expect(state.mode).toBe("approval");
     expect(state.pendingApproval?.tool).toBe("apply_patch");
     expect(state.runtimeStatus).toBe("paused");
+  });
+
+  it("formats read-only tool events without raw json noise", () => {
+    let state = createInitialInteractiveState({
+      cwd: "/workspace/project",
+      doctor: null,
+      recentSessions: []
+    });
+
+    state = applyRuntimeEvent(state, {
+      at: "2026-03-10T10:00:00.000Z",
+      inputSummary: JSON.stringify({
+        endLine: 80,
+        path: "/workspace/project/src/interactive/app.ts",
+        startLine: 1
+      }),
+      tool: "read_file",
+      type: "tool_called"
+    });
+    state = applyRuntimeEvent(state, {
+      at: "2026-03-10T10:00:01.000Z",
+      observation: {
+        excerpt: "export async function runInteractiveApp() {}",
+        path: "/workspace/project/src/interactive/app.ts",
+        summary: "Read src/interactive/app.ts lines 1-80.",
+        tool: "read_file"
+      },
+      tool: "read_file",
+      type: "tool_result"
+    });
+
+    expect(state.transcript).toHaveLength(1);
+    expect(state.transcript[0]?.body).toBe("Read src/interactive/app.ts");
   });
 });

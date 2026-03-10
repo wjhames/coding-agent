@@ -83,17 +83,7 @@ export function createInitialInteractiveState(args: {
     selectedSessionIndex: 0,
     selectedTranscriptIndex: 0,
     sessionId: null,
-    transcript: [
-      {
-        body:
-          args.recentSessions.length > 0
-            ? "Type a new task or press Enter to resume the selected recent session."
-            : "Type a task and press Enter to start.",
-        id: "welcome",
-        kind: "system",
-        title: "Welcome"
-      }
-    ],
+    transcript: [],
     transcriptScroll: 0,
     verification: null
   };
@@ -104,7 +94,6 @@ export function applyRuntimeEvent(state: InteractiveState, event: RuntimeEvent):
     case "status":
       return {
         ...state,
-        footerMessage: event.detail ?? state.footerMessage,
         runtimeStatus: event.status,
         ...(event.detail && event.detail.length > 0
           ? withTranscriptEntry(state, {
@@ -130,32 +119,46 @@ export function applyRuntimeEvent(state: InteractiveState, event: RuntimeEvent):
         })
       };
     case "tool_called":
+      if (event.tool === "write_plan") {
+        return state;
+      }
       return {
         ...state,
         ...withTranscriptEntry(state, {
-          body: event.inputSummary,
+          body: formatToolCall(event.tool, event.inputSummary, state.cwd),
           id: `${event.type}:${event.at}`,
           kind: "tool",
           title: `[${event.tool}]`
         })
       };
     case "tool_result": {
+      const shouldStreamResult =
+        Boolean(event.error) ||
+        event.tool === "apply_patch" ||
+        event.tool === "run_shell" ||
+        Boolean(event.changedFiles && event.changedFiles.length > 0);
       const detailParts = [
         event.observation?.excerpt,
         event.error,
         event.artifacts?.map((artifact) => artifact.diff).join("\n\n")
       ].filter(Boolean);
+
+      if (!shouldStreamResult) {
+        return {
+          ...state,
+          artifacts: event.artifacts ? mergeArtifacts(state.artifacts, event.artifacts) : state.artifacts,
+          changedFiles: event.changedFiles
+            ? [...new Set([...state.changedFiles, ...event.changedFiles])].sort()
+            : state.changedFiles
+        };
+      }
+
       return {
         ...state,
         artifacts: event.artifacts ? mergeArtifacts(state.artifacts, event.artifacts) : state.artifacts,
         changedFiles: event.changedFiles ? [...new Set([...state.changedFiles, ...event.changedFiles])].sort() : state.changedFiles,
         ...withTranscriptEntry(state, {
-          body:
-            event.error ??
-            event.observation?.summary ??
-            (event.changedFiles && event.changedFiles.length > 0
-              ? `Changed: ${event.changedFiles.join(", ")}`
-              : "Completed."),
+          body: formatToolResult(event, state.cwd),
           detail: detailParts.length > 0 ? detailParts.join("\n\n") : undefined,
           id: `${event.type}:${event.at}`,
           kind: "tool",
@@ -241,7 +244,7 @@ export function applyCommandResult(state: InteractiveState, result: CommandResul
         ? "Approval required."
         : result.status === "failed"
           ? "Run failed."
-          : "Ready for the next task.",
+          : null,
     input: "",
     mode: result.status === "paused" ? "approval" : "home",
     pendingApproval: result.pendingApproval,
@@ -317,4 +320,99 @@ function formatVerificationSummary(verification: VerificationSummary): string {
   }
 
   return lines.join("\n");
+}
+
+function formatToolCall(
+  tool: "apply_patch" | "list_files" | "read_file" | "run_shell" | "search_files" | "write_plan",
+  inputSummary: string,
+  cwd: string
+): string {
+  const input = parseToolSummary(inputSummary);
+
+  if (tool === "read_file") {
+    return `Read ${normalizeDisplayPath(readPathFromSummary(input), cwd)}`;
+  }
+
+  if (tool === "list_files") {
+    return `List files in ${normalizeDisplayPath(readPathFromSummary(input) ?? ".", cwd)}`;
+  }
+
+  if (tool === "search_files") {
+    const query = typeof input?.query === "string" ? input.query : "pattern";
+    const path = normalizeDisplayPath(readPathFromSummary(input) ?? ".", cwd);
+    return `Search ${JSON.stringify(query)} in ${path}`;
+  }
+
+  if (tool === "run_shell") {
+    const command = typeof input?.command === "string" ? input.command : inputSummary;
+    return `$ ${normalizeInlineText(command, cwd)}`;
+  }
+
+  if (tool === "apply_patch") {
+    const count = Array.isArray(input?.operations) ? input.operations.length : 0;
+    return count > 0 ? `Apply patch (${count} operation${count === 1 ? "" : "s"})` : "Apply patch";
+  }
+
+  return normalizeInlineText(inputSummary, cwd);
+}
+
+function formatToolResult(
+  event: {
+    changedFiles?: string[] | undefined;
+    error?: string | undefined;
+    observation?: { summary: string } | undefined;
+    tool: "apply_patch" | "list_files" | "read_file" | "run_shell" | "search_files" | "write_plan";
+  },
+  cwd: string
+): string {
+  if (event.error) {
+    return normalizeInlineText(event.error, cwd);
+  }
+
+  if (event.tool === "apply_patch" && event.changedFiles && event.changedFiles.length > 0) {
+    return `Changed ${event.changedFiles.map((path) => normalizeDisplayPath(path, cwd)).join(", ")}`;
+  }
+
+  if (event.tool === "run_shell" && event.observation?.summary) {
+    return normalizeInlineText(event.observation.summary, cwd);
+  }
+
+  if (event.changedFiles && event.changedFiles.length > 0) {
+    return `Changed ${event.changedFiles.map((path) => normalizeDisplayPath(path, cwd)).join(", ")}`;
+  }
+
+  return normalizeInlineText(event.observation?.summary ?? "Completed.", cwd);
+}
+
+function parseToolSummary(inputSummary: string): Record<string, unknown> | null {
+  try {
+    const parsed = JSON.parse(inputSummary);
+    return parsed && typeof parsed === "object" ? (parsed as Record<string, unknown>) : null;
+  } catch {
+    return null;
+  }
+}
+
+function readPathFromSummary(input: Record<string, unknown> | null): string | null {
+  if (!input) {
+    return null;
+  }
+
+  return typeof input.path === "string" ? input.path : null;
+}
+
+function normalizeDisplayPath(path: string | null | undefined, cwd: string): string {
+  if (!path || path === cwd) {
+    return ".";
+  }
+
+  if (path.startsWith(`${cwd}/`)) {
+    return path.slice(cwd.length + 1);
+  }
+
+  return path;
+}
+
+function normalizeInlineText(text: string, cwd: string): string {
+  return text.split(cwd).join(".");
 }
