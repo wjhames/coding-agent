@@ -1,5 +1,10 @@
 import { resolve } from "node:path";
-import type { CommandResult, PlanState, RepoContextSummary } from "../cli/output.js";
+import type {
+  CommandResult,
+  Observation,
+  PlanState,
+  RepoContextSummary
+} from "../cli/output.js";
 import { collectRepoContext, type RepoContext } from "./context.js";
 import { inferVerificationCommands } from "./verification.js";
 import {
@@ -10,6 +15,9 @@ import {
 import type { ParsedOptions } from "../cli/parse.js";
 import { createOpenAICompatibleClient } from "../llm/openai.js";
 import { createSession } from "../session/store.js";
+import { createListFilesTool } from "../tools/list-files.js";
+import { createReadFileTool } from "../tools/read-file.js";
+import { createSearchFilesTool } from "../tools/search-files.js";
 import { createWritePlanTool } from "../tools/write-plan.js";
 
 export async function runExec(args: {
@@ -33,6 +41,7 @@ export async function runExec(args: {
   const verificationCommands = inferVerificationCommands({
     packageScripts: repoContext.packageScripts
   });
+  const observations: Observation[] = [];
   let plan: PlanState | null = null;
   const client = createOpenAICompatibleClient({
     apiKey: llmConfig.apiKey,
@@ -47,6 +56,24 @@ export async function runExec(args: {
         getPlan: () => plan,
         setPlan: (nextPlan) => {
           plan = nextPlan;
+        }
+      }),
+      createListFilesTool({
+        cwd,
+        observe: (observation) => {
+          observations.push(observation);
+        }
+      }),
+      createSearchFilesTool({
+        cwd,
+        observe: (observation) => {
+          observations.push(observation);
+        }
+      }),
+      createReadFileTool({
+        cwd,
+        observe: (observation) => {
+          observations.push(observation);
         }
       })
     ],
@@ -69,6 +96,7 @@ export async function runExec(args: {
       cwd,
       mode: "exec",
       nextActions,
+      observations,
       plan,
       prompt: args.prompt,
       repoContext: repoContextSummary,
@@ -90,6 +118,7 @@ export async function runExec(args: {
     changedFiles: session.changedFiles,
     exitCode: 0,
     nextActions: session.nextActions,
+    observations: session.observations,
     plan: session.plan,
     repoContext: session.repoContext,
     sessionId: session.id,
@@ -148,6 +177,7 @@ function buildSystemPrompt(): string {
     "You are a CLI coding agent.",
     "You have not edited files yet and must not claim to have done so.",
     "You must call the write_plan tool before your final response.",
+    "Use list_files, search_files, and read_file when you need more repository detail.",
     "Use the plan to capture a short concrete todo list for the task.",
     "After calling the tool, produce a concise execution summary and immediate next actions.",
     "Do not claim tests ran or files changed when they did not."

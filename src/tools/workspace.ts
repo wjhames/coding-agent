@@ -1,0 +1,69 @@
+import { readdir, readFile } from "node:fs/promises";
+import { relative, resolve, sep } from "node:path";
+
+const SKIPPED_DIRS = new Set([".git", "node_modules", "dist", "coverage"]);
+
+export function resolveWorkspacePath(cwd: string, requestedPath = "."): string {
+  const resolvedPath = resolve(cwd, requestedPath);
+  const relativePath = relative(cwd, resolvedPath);
+
+  if (
+    relativePath === ".." ||
+    relativePath.startsWith(`..${sep}`) ||
+    relativePath.startsWith("../")
+  ) {
+    throw new Error("Requested path is outside the workspace.");
+  }
+
+  return resolvedPath;
+}
+
+export async function walkWorkspaceFiles(args: {
+  cwd: string;
+  limit: number;
+  path: string | undefined;
+}): Promise<string[]> {
+  const root = resolveWorkspacePath(args.cwd, args.path);
+  const files: string[] = [];
+
+  await walk(root, files, args.limit);
+
+  return files.map((file) => relative(args.cwd, file)).sort();
+}
+
+export async function readWorkspaceTextFile(args: {
+  cwd: string;
+  maxBytes: number;
+  path: string;
+}): Promise<string> {
+  const resolvedPath = resolveWorkspacePath(args.cwd, args.path);
+  const contents = await readFile(resolvedPath, "utf8");
+  return contents.slice(0, args.maxBytes);
+}
+
+async function walk(currentPath: string, files: string[], limit: number): Promise<void> {
+  if (files.length >= limit) {
+    return;
+  }
+
+  const entries = await readdir(currentPath, { withFileTypes: true });
+
+  for (const entry of entries) {
+    if (files.length >= limit) {
+      return;
+    }
+
+    if (entry.isDirectory()) {
+      if (SKIPPED_DIRS.has(entry.name)) {
+        continue;
+      }
+
+      await walk(resolve(currentPath, entry.name), files, limit);
+      continue;
+    }
+
+    if (entry.isFile()) {
+      files.push(resolve(currentPath, entry.name));
+    }
+  }
+}

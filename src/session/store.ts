@@ -3,6 +3,7 @@ import { readdir, readFile, writeFile } from "node:fs/promises";
 import { basename } from "node:path";
 import { z } from "zod";
 import type {
+  Observation,
   PlanState,
   RepoContextSummary,
   VerificationSummary
@@ -24,6 +25,13 @@ const repoContextSchema = z.object({
   guidanceFiles: z.array(z.string()),
   isGitRepo: z.boolean(),
   topLevelEntries: z.array(z.string())
+});
+const observationSchema = z.object({
+  excerpt: z.string(),
+  path: z.string().optional(),
+  query: z.string().optional(),
+  summary: z.string(),
+  tool: z.enum(["list_files", "read_file", "search_files"])
 });
 const verificationSchema = z.object({
   commands: z.array(z.string()),
@@ -52,6 +60,7 @@ export const sessionRecordSchema = z
     id: z.string(),
     mode: sessionModeSchema,
     nextActions: z.array(z.string()),
+    observations: z.array(observationSchema),
     plan: planStateSchema.nullable(),
     prompt: z.string(),
     repoContext: repoContextSchema,
@@ -74,6 +83,7 @@ export interface CreateSessionInput {
   cwd: string;
   mode: SessionMode;
   nextActions?: string[];
+  observations?: Observation[];
   plan?: PlanState | null;
   prompt: string;
   repoContext: RepoContextSummary;
@@ -99,6 +109,7 @@ export async function createSession(
     id: randomUUID(),
     mode: input.mode,
     nextActions: input.nextActions ?? [],
+    observations: input.observations ?? [],
     plan: input.plan ?? null,
     prompt: input.prompt,
     repoContext: input.repoContext,

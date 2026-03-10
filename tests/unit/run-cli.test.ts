@@ -55,6 +55,19 @@ describe("runCli", () => {
       "Inspect repo guidance",
       "Identify likely verification commands"
     ]);
+    expect(payload.observations).toHaveLength(2);
+    expect(payload.observations[0]).toEqual({
+      excerpt: expect.stringContaining("package.json:1:"),
+      query: "scripts",
+      summary: "Found 1 match(es) for \"scripts\".",
+      tool: "search_files"
+    });
+    expect(payload.observations[1]).toEqual({
+      excerpt: expect.stringContaining("\"scripts\""),
+      path: "package.json",
+      summary: expect.stringContaining("Read package.json lines"),
+      tool: "read_file"
+    });
     expect(payload.repoContext).toEqual({
       guidanceFiles: ["AGENTS.md", "README.md", "package.json"],
       isGitRepo: true,
@@ -91,6 +104,7 @@ describe("runCli", () => {
     expect(payload.status).toBe("completed");
     expect(payload.resumedFrom).toEqual(payload.sessionId);
     expect(payload.plan.summary).toBe("Investigate the repository");
+    expect(payload.observations).toHaveLength(2);
   });
 
   it("exec rejects a missing prompt", async () => {
@@ -139,7 +153,7 @@ describe("runCli", () => {
     );
 
     expect(exitCode).toBe(0);
-    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    expect(fetchImpl).toHaveBeenCalledTimes(3);
     expect(fetchImpl).toHaveBeenCalledWith(
       "http://localhost:1234/v1/chat/completions",
       expect.objectContaining({
@@ -275,6 +289,49 @@ function mockCompletionFetch(content: string) {
                             status: "pending"
                           }
                         ]
+                      })
+                    }
+                  }
+                ]
+              }
+            }
+          ]
+        }),
+        {
+          status: 200,
+          headers: {
+            "content-type": "application/json"
+          }
+        }
+      )
+    )
+    .mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          choices: [
+            {
+              message: {
+                content: null,
+                tool_calls: [
+                  {
+                    id: "call-2",
+                    type: "function",
+                    function: {
+                      name: "search_files",
+                      arguments: JSON.stringify({
+                        query: "scripts"
+                      })
+                    }
+                  },
+                  {
+                    id: "call-3",
+                    type: "function",
+                    function: {
+                      name: "read_file",
+                      arguments: JSON.stringify({
+                        path: "package.json",
+                        startLine: 1,
+                        maxLines: 20
                       })
                     }
                   }

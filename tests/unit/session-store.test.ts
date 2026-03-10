@@ -26,6 +26,14 @@ describe("session store", () => {
         cwd: "/workspace/project",
         mode: "exec",
         nextActions: ["Run npm test"],
+        observations: [
+          {
+            excerpt: "1: test line",
+            path: "src/test.ts",
+            summary: "Read src/test.ts lines 1-1.",
+            tool: "read_file"
+          }
+        ],
         plan: {
           summary: "Fix the tests",
           items: [
@@ -66,6 +74,7 @@ describe("session store", () => {
         config: {},
         cwd: "/workspace/one",
         mode: "exec",
+        observations: [],
         repoContext: {
           guidanceFiles: [],
           isGitRepo: true,
@@ -85,6 +94,7 @@ describe("session store", () => {
         config: {},
         cwd: "/workspace/two",
         mode: "exec",
+        observations: [],
         repoContext: {
           guidanceFiles: [],
           isGitRepo: true,

@@ -17,6 +17,14 @@ export interface RepoContextSummary {
   topLevelEntries: string[];
 }
 
+export interface Observation {
+  excerpt: string;
+  query?: string | undefined;
+  path?: string | undefined;
+  summary: string;
+  tool: "list_files" | "read_file" | "search_files";
+}
+
 export interface VerificationSummary {
   commands: string[];
   inferred: boolean;
@@ -30,6 +38,7 @@ export interface CommandResult {
   exitCode: 0 | 1 | 2;
   changedFiles: string[];
   nextActions: string[];
+  observations: Observation[];
   plan: PlanState | null;
   repoContext: RepoContextSummary;
   sessionId: string | null;

@@ -20,6 +20,7 @@ export async function runResume(args: {
     exitCode: session.status === "paused" ? 2 : session.status === "completed" ? 0 : 1,
     changedFiles: session.changedFiles,
     nextActions: session.nextActions,
+    observations: session.observations,
     plan: session.plan,
     repoContext: session.repoContext,
     resumedFrom: session.id,
