@@ -2,12 +2,18 @@
 
 import { pathToFileURL } from "node:url";
 import process from "node:process";
-import { runExec } from "../app/exec.js";
-import { runResume } from "../app/resume.js";
+import { ApprovalDeniedError } from "../app/approval.js";
 import { ConfigError } from "../config/load.js";
 import { LlmError } from "../llm/openai.js";
 import { SessionStoreError } from "../session/store.js";
-import { renderExecHelp, renderResumeHelp, renderRootHelp } from "./help.js";
+import { listSessions, resumeTask, runDoctor, startTask } from "../runtime/api.js";
+import {
+  renderDoctorHelp,
+  renderExecHelp,
+  renderResumeHelp,
+  renderRootHelp,
+  renderSessionsHelp
+} from "./help.js";
 import {
   type CliIO,
   writeCommandError,
@@ -56,8 +62,39 @@ export async function runCli(
 
     if (invocation.options.help) {
       const helpText =
-        invocation.command === "exec" ? renderExecHelp() : renderResumeHelp();
+        invocation.command === "exec"
+          ? renderExecHelp()
+          : invocation.command === "resume"
+            ? renderResumeHelp()
+            : invocation.command === "doctor"
+              ? renderDoctorHelp()
+              : invocation.command === "sessions"
+                ? renderSessionsHelp()
+                : renderRootHelp();
       io.stdout.write(`${helpText}\n`);
+      return 0;
+    }
+
+    if (invocation.command === "doctor") {
+      const doctor = await runDoctor({
+        environment: runtime,
+        options: invocation.options
+      });
+      const body = invocation.options.json
+        ? `${JSON.stringify(doctor, null, 2)}\n`
+        : `Config present: ${doctor.configPresent}\nLLM ready: ${doctor.llmReady}\nModel: ${doctor.model ?? "unset"}\nProfiles: ${doctor.profiles.join(", ") || "none"}\n`;
+      io.stdout.write(body);
+      return 0;
+    }
+
+    if (invocation.command === "sessions") {
+      const sessions = await listSessions({
+        environment: runtime
+      });
+      const body = invocation.options.json
+        ? `${JSON.stringify(sessions, null, 2)}\n`
+        : `${sessions.map((session) => `${session.id} ${session.status} ${session.updatedAt}`).join("\n")}\n`;
+      io.stdout.write(body);
       return 0;
     }
 
@@ -77,12 +114,10 @@ export async function runCli(
         return 1;
       }
 
-      const result = await runExec({
-        fetchImpl: runtime.fetchImpl,
+      const result = await startTask({
+        environment: runtime,
         options: invocation.options,
-        processCwd: runtime.processCwd,
-        prompt: invocation.prompt,
-        sessionHomeDir: runtime.sessionHomeDir
+        prompt: invocation.prompt
       });
 
       await writeCommandResult(
@@ -95,11 +130,10 @@ export async function runCli(
       return result.exitCode;
     }
 
-    const result = await runResume({
-      fetchImpl: runtime.fetchImpl,
+    const result = await resumeTask({
+      environment: runtime,
       options: invocation.options,
-      sessionHomeDir: runtime.sessionHomeDir,
-      sessionId: invocation.sessionId
+      ...(invocation.sessionId ? { sessionId: invocation.sessionId } : {})
     });
 
     if (!result) {
@@ -133,9 +167,11 @@ export async function runCli(
             ? "config_error"
             : error instanceof LlmError
               ? "llm_error"
+              : error instanceof ApprovalDeniedError
+                ? "approval_required"
               : error instanceof TypeError
                 ? "network_error"
-            : error instanceof SessionStoreError
+                : error instanceof SessionStoreError
               ? "session_error"
               : "cli_error",
       message,

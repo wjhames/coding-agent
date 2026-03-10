@@ -1,6 +1,6 @@
 import { parseArgs } from "node:util";
 
-export type CommandName = "interactive" | "exec" | "resume";
+export type CommandName = "doctor" | "interactive" | "exec" | "resume" | "sessions";
 
 export interface ParsedOptions {
   approvalPolicy: string | undefined;
@@ -43,7 +43,10 @@ const optionSpec = {
 
 export function parseCliArgs(argv: string[]): CliInvocation {
   const [first, ...rest] = argv;
-  const command = first === "exec" || first === "resume" ? first : "interactive";
+  const command =
+    first === "doctor" || first === "exec" || first === "resume" || first === "sessions"
+      ? first
+      : "interactive";
   const commandArgv = command === "interactive" ? argv : rest;
   const parsed = parseArgs({
     args: commandArgv,
@@ -54,7 +57,7 @@ export function parseCliArgs(argv: string[]): CliInvocation {
 
   const options = normalizeOptions(parsed.values);
 
-  if (command === "interactive") {
+  if (command === "interactive" || command === "doctor" || command === "sessions") {
     return {
       command,
       options,

@@ -68,6 +68,8 @@ describe("session store", () => {
               stdout: "ok"
             }
           ],
+          selectedCommands: ["npm test"],
+          skippedCommands: [],
           status: "passed"
         }
       },
@@ -105,6 +107,8 @@ describe("session store", () => {
           passed: false,
           ran: false,
           runs: [],
+          selectedCommands: [],
+          skippedCommands: [],
           status: "not_run"
         }
       },
@@ -134,6 +138,8 @@ describe("session store", () => {
           passed: false,
           ran: false,
           runs: [],
+          selectedCommands: [],
+          skippedCommands: [],
           status: "not_run"
         }
       },
@@ -174,6 +180,8 @@ describe("session store", () => {
           passed: false,
           ran: false,
           runs: [],
+          selectedCommands: [],
+          skippedCommands: [],
           status: "not_run"
         }
       },
@@ -219,6 +227,8 @@ describe("session store", () => {
           passed: false,
           ran: false,
           runs: [],
+          selectedCommands: ["npm test"],
+          skippedCommands: [],
           status: "not_run"
         }
       },

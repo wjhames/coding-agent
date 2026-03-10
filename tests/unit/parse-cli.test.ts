@@ -24,6 +24,48 @@ describe("parseCliArgs", () => {
     });
   });
 
+  it("parses doctor and sessions commands", () => {
+    expect(parseCliArgs(["doctor", "--json"])).toEqual({
+      command: "doctor",
+      options: {
+        approvalPolicy: undefined,
+        baseUrl: undefined,
+        cwd: undefined,
+        help: false,
+        json: true,
+        maxSteps: undefined,
+        model: undefined,
+        output: undefined,
+        profile: undefined,
+        quiet: false,
+        timeout: undefined,
+        verbose: false
+      },
+      prompt: undefined,
+      sessionId: undefined
+    });
+
+    expect(parseCliArgs(["sessions"])).toEqual({
+      command: "sessions",
+      options: {
+        approvalPolicy: undefined,
+        baseUrl: undefined,
+        cwd: undefined,
+        help: false,
+        json: false,
+        maxSteps: undefined,
+        model: undefined,
+        output: undefined,
+        profile: undefined,
+        quiet: false,
+        timeout: undefined,
+        verbose: false
+      },
+      prompt: undefined,
+      sessionId: undefined
+    });
+  });
+
   it("parses exec flags and prompt", () => {
     expect(
       parseCliArgs([

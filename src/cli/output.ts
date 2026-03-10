@@ -1,132 +1,30 @@
 import { writeFile } from "node:fs/promises";
+import type { CommandError, CommandResult } from "../runtime/contracts.js";
 
-export interface PlanItem {
-  id: string;
-  content: string;
-  status: "pending" | "in_progress" | "completed";
-}
-
-export interface PlanState {
-  summary: string;
-  items: PlanItem[];
-}
-
-export interface RepoContextSummary {
-  guidanceFiles: string[];
-  isGitRepo: boolean;
-  topLevelEntries: string[];
-}
-
-export interface Observation {
-  excerpt: string;
-  query?: string | undefined;
-  path?: string | undefined;
-  summary: string;
-  tool: "apply_patch" | "list_files" | "read_file" | "run_shell" | "search_files";
-}
-
-export interface Artifact {
-  diff: string;
-  kind: "diff";
-  path: string;
-}
-
-export interface Approval {
-  command?: string | undefined;
-  id: string;
-  reason: string;
-  status: "approved" | "pending" | "rejected";
-  summary: string;
-  tool: "apply_patch" | "run_shell";
-}
-
-export interface PendingApprovalInfo {
-  command?: string | undefined;
-  operationCount?: number | undefined;
-  reason: string;
-  summary: string;
-  tool: "apply_patch" | "run_shell";
-}
-
-export interface VerificationRun {
-  command: string;
-  exitCode: number;
-  passed: boolean;
-  stderr: string;
-  stdout: string;
-}
-
-export interface VerificationSummary {
-  commands: string[];
-  inferred: boolean;
-  notRunReason: string | null;
-  passed: boolean;
-  ran: boolean;
-  runs: VerificationRun[];
-  status: "failed" | "not_run" | "passed";
-}
-
-export interface GuidanceSource {
-  path: string;
-  priority: number;
-  source: "home" | "repo" | "task";
-}
-
-export interface GuidanceSummary {
-  activeRules: string[];
-  sources: GuidanceSource[];
-}
-
-export interface MemoryEntry {
-  createdAt: string;
-  evidence: string[];
-  kind: "artifact" | "decision" | "working";
-  relevance: "high" | "medium" | "low";
-  summary: string;
-}
-
-export interface MemorySummary {
-  artifacts: MemoryEntry[];
-  decisions: MemoryEntry[];
-  working: MemoryEntry[];
-}
-
-export interface CompactionSummary {
-  changedFilesSummary: string | null;
-  eventSummary: string | null;
-  observationSummary: string | null;
-  verificationSummary: string | null;
-}
-
-export interface CommandResult {
-  approvals: Approval[];
-  artifacts: Artifact[];
-  changedFiles: string[];
-  compaction: CompactionSummary;
-  eventCount: number;
-  guidance: GuidanceSummary;
-  lastEventAt: string | null;
-  memory: MemorySummary;
-  verification: VerificationSummary;
-  exitCode: 0 | 1 | 2;
-  nextActions: string[];
-  observations: Observation[];
-  pendingApproval: PendingApprovalInfo | null;
-  plan: PlanState | null;
-  repoContext: RepoContextSummary;
-  resumeCommand: string | null;
-  sessionId: string | null;
-  status: "completed" | "failed" | "paused";
-  summary: string;
-  resumedFrom?: string | null;
-}
-
-export interface CommandError {
-  error: string;
-  message: string;
-  exitCode: 1 | 2;
-  sessionId?: string | null;
-}
+export type {
+  Approval,
+  Artifact,
+  CommandError,
+  CommandResult,
+  CompactionSummary,
+  GuidanceSource,
+  GuidanceSummary,
+  MemoryEntry,
+  MemorySummary,
+  Observation,
+  PendingAction,
+  PendingApprovalInfo,
+  PlanItem,
+  PlanState,
+  RepoContextSummary,
+  SessionConfig,
+  SessionMode,
+  SessionStatus,
+  ToolName,
+  VerificationRun,
+  VerificationSkipped,
+  VerificationSummary
+} from "../runtime/contracts.js";
 
 export interface CliIO {
   stdout: Pick<NodeJS.WritableStream, "write">;
@@ -139,15 +37,14 @@ export async function writeCommandResult(
   json: boolean,
   outputPath?: string
 ): Promise<void> {
-  const body = json
-    ? `${JSON.stringify(result, null, 2)}\n`
-    : `${result.summary}\n`;
+  const body = json ? `${JSON.stringify(result, null, 2)}\n` : `${result.summary}\n`;
 
   if (outputPath) {
     await writeFile(outputPath, body, "utf8");
-  } else {
-    io.stdout.write(body);
+    return;
   }
+
+  io.stdout.write(body);
 }
 
 export async function writeCommandError(
@@ -156,13 +53,12 @@ export async function writeCommandError(
   json: boolean,
   outputPath?: string
 ): Promise<void> {
-  const body = json
-    ? `${JSON.stringify(error, null, 2)}\n`
-    : `${error.message}\n`;
+  const body = json ? `${JSON.stringify(error, null, 2)}\n` : `${error.message}\n`;
 
   if (outputPath) {
     await writeFile(outputPath, body, "utf8");
-  } else {
-    io.stderr.write(body);
+    return;
   }
+
+  io.stderr.write(body);
 }

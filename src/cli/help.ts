@@ -4,8 +4,10 @@ export function renderRootHelp(): string {
     "",
     "Usage:",
     "  coding-agent [flags]",
+    "  coding-agent doctor [flags]",
     "  coding-agent exec [prompt] [flags]",
     "  coding-agent resume [session-id] [flags]",
+    "  coding-agent sessions [flags]",
     "",
     "Global flags:",
     "  -C, --cwd <DIR>",
@@ -21,7 +23,13 @@ export function renderRootHelp(): string {
     "  --base-url <URL>",
     "  --output <FILE>",
     "  --quiet",
-    "  --verbose"
+    "  --verbose",
+    "",
+    "Examples:",
+    "  coding-agent exec \"fix the failing test\" --json",
+    "  coding-agent resume",
+    "  coding-agent sessions --json",
+    "  coding-agent doctor --json"
   ].join("\n");
 }
 
@@ -62,6 +70,33 @@ export function renderResumeHelp(): string {
     "  --output <FILE>",
     "  --quiet",
     "  --verbose",
+    "  -h, --help"
+  ].join("\n");
+}
+
+export function renderDoctorHelp(): string {
+  return [
+    "coding-agent doctor",
+    "",
+    "Usage:",
+    "  coding-agent doctor [flags]",
+    "",
+    "Flags:",
+    "  -p, --profile <PROFILE>",
+    "  --json",
+    "  -h, --help"
+  ].join("\n");
+}
+
+export function renderSessionsHelp(): string {
+  return [
+    "coding-agent sessions",
+    "",
+    "Usage:",
+    "  coding-agent sessions [flags]",
+    "",
+    "Flags:",
+    "  --json",
     "  -h, --help"
   ].join("\n");
 }

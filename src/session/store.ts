@@ -2,17 +2,30 @@ import { randomUUID } from "node:crypto";
 import { readdir, readFile, writeFile } from "node:fs/promises";
 import { basename } from "node:path";
 import { z } from "zod";
-import type {
-  Approval,
-  Artifact,
-  CompactionSummary,
-  GuidanceSummary,
-  MemorySummary,
-  Observation,
-  PlanState,
-  RepoContextSummary,
-  VerificationSummary
-} from "../cli/output.js";
+import {
+  approvalSchema,
+  artifactSchema,
+  compactionSummarySchema,
+  guidanceSummarySchema,
+  memorySummarySchema,
+  observationSchema,
+  pendingActionSchema,
+  planStateSchema,
+  repoContextSchema,
+  sessionConfigSchema,
+  sessionModeSchema,
+  sessionStatusSchema,
+  type Approval,
+  type Artifact,
+  type CompactionSummary,
+  type GuidanceSummary,
+  type MemorySummary,
+  type Observation,
+  type PlanState,
+  type RepoContextSummary,
+  type VerificationSummary,
+  verificationSchema
+} from "../runtime/contracts.js";
 import {
   appendSessionEvents,
   createSessionCompletedEvent,
@@ -26,143 +39,13 @@ import {
 } from "./events.js";
 import { ensureSessionRoot, getSessionFilePath, getSessionRoot } from "./paths.js";
 
-export const sessionStatusSchema = z.enum(["completed", "failed", "paused"]);
-export const sessionModeSchema = z.enum(["interactive", "exec"]);
-const planItemSchema = z.object({
-  id: z.string(),
-  content: z.string(),
-  status: z.enum(["pending", "in_progress", "completed"])
-});
-const planStateSchema = z.object({
-  summary: z.string(),
-  items: z.array(planItemSchema)
-});
-const repoContextSchema = z.object({
-  guidanceFiles: z.array(z.string()),
-  isGitRepo: z.boolean(),
-  topLevelEntries: z.array(z.string())
-});
-const observationSchema = z.object({
-  excerpt: z.string(),
-  path: z.string().optional(),
-  query: z.string().optional(),
-  summary: z.string(),
-  tool: z.enum(["apply_patch", "list_files", "read_file", "run_shell", "search_files"])
-});
-const artifactSchema = z.object({
-  diff: z.string(),
-  kind: z.literal("diff"),
-  path: z.string()
-});
-const approvalSchema = z.object({
-  command: z.string().optional(),
-  id: z.string(),
-  reason: z.string(),
-  status: z.enum(["approved", "pending", "rejected"]),
-  summary: z.string(),
-  tool: z.enum(["apply_patch", "run_shell"])
-});
-const patchReplaceSchema = z.object({
-  newText: z.string(),
-  oldText: z.string(),
-  path: z.string(),
-  type: z.literal("replace")
-});
-const patchCreateSchema = z.object({
-  content: z.string(),
-  path: z.string(),
-  type: z.literal("create")
-});
-const patchDeleteSchema = z.object({
-  path: z.string(),
-  type: z.literal("delete")
-});
-const pendingPatchSchema = z.object({
-  approval: approvalSchema,
-  action: z.object({
-    operations: z.array(z.discriminatedUnion("type", [patchReplaceSchema, patchCreateSchema, patchDeleteSchema]))
-  }),
-  tool: z.literal("apply_patch")
-});
-const pendingShellSchema = z.object({
-  approval: approvalSchema,
-  action: z.object({
-    command: z.string(),
-    justification: z.string().optional()
-  }),
-  tool: z.literal("run_shell")
-});
-const verificationSchema = z
-  .object({
-    commands: z.array(z.string()),
-    inferred: z.boolean(),
-    notRunReason: z.string().nullable().optional(),
-    passed: z.boolean(),
-    ran: z.boolean().optional(),
-    runs: z.array(
-      z.object({
-        command: z.string(),
-        exitCode: z.number().int(),
-        passed: z.boolean(),
-        stderr: z.string(),
-        stdout: z.string()
-      })
-    ),
-    status: z.enum(["failed", "not_run", "passed"]).optional()
-  })
-  .transform((value) => ({
-    ...value,
-    notRunReason: value.notRunReason ?? null,
-    ran: value.ran ?? value.runs.length > 0,
-    status:
-      value.status ??
-      (value.runs.length === 0 ? "not_run" : value.passed ? "passed" : "failed")
-  }));
-const guidanceSourceSchema = z.object({
-  path: z.string(),
-  priority: z.number().int(),
-  source: z.enum(["home", "repo", "task"])
-});
-const guidanceSummarySchema = z.object({
-  activeRules: z.array(z.string()),
-  sources: z.array(guidanceSourceSchema)
-});
-const memoryEntrySchema = z.object({
-  createdAt: z.string(),
-  evidence: z.array(z.string()),
-  kind: z.enum(["artifact", "decision", "working"]),
-  relevance: z.enum(["high", "medium", "low"]),
-  summary: z.string()
-});
-const memorySummarySchema = z.object({
-  artifacts: z.array(memoryEntrySchema),
-  decisions: z.array(memoryEntrySchema),
-  working: z.array(memoryEntrySchema)
-});
-const compactionSummarySchema = z.object({
-  changedFilesSummary: z.string().nullable(),
-  eventSummary: z.string().nullable(),
-  observationSummary: z.string().nullable(),
-  verificationSummary: z.string().nullable()
-});
-
 export const sessionRecordSchema = z
   .object({
     approvals: z.array(approvalSchema),
     artifacts: z.array(artifactSchema),
     changedFiles: z.array(z.string()),
     compaction: compactionSummarySchema,
-    config: z
-      .object({
-        approvalPolicy: z.enum(["auto", "prompt", "never"]).optional(),
-        baseUrl: z.string().url().optional(),
-        maxSteps: z.number().int().positive().optional(),
-        model: z.string().optional(),
-        networkEgress: z.boolean().optional(),
-        profileName: z.string().optional(),
-        timeout: z.string().optional()
-      })
-      .strict(),
+    config: sessionConfigSchema,
     createdAt: z.string(),
     cwd: z.string(),
     eventCount: z.number().int().nonnegative(),
@@ -173,7 +56,7 @@ export const sessionRecordSchema = z
     mode: sessionModeSchema,
     nextActions: z.array(z.string()),
     observations: z.array(observationSchema),
-    pendingAction: z.union([pendingPatchSchema, pendingShellSchema]).nullable(),
+    pendingAction: pendingActionSchema.nullable(),
     plan: planStateSchema.nullable(),
     prompt: z.string(),
     repoContext: repoContextSchema,
@@ -262,6 +145,8 @@ export async function createSession(
       passed: false,
       ran: false,
       runs: [],
+      selectedCommands: [],
+      skippedCommands: [],
       status: "not_run"
     }
   };
