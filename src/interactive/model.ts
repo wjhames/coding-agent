@@ -14,6 +14,9 @@ import type { SessionRecord } from "../session/store.js";
 const CONTEXT_BUDGET_CHARS = 18_000;
 const MAX_GROUPED_ACTIVITY_LINES = 8;
 const BLANK_RENDER_LINE = " ";
+const LIVE_EDGE_BOTTOM_ALIGN_THRESHOLD = 0.75;
+const PAGE_SCROLL_STEP = 12;
+const LINE_SCROLL_STEP = 3;
 
 type ActivityBucket = "command" | "edit" | "explore" | "plan" | "verification";
 type BlockTone = "default" | "dim" | "success" | "warning";
@@ -122,13 +125,13 @@ export function scrollInteractiveViewport(
 ): InteractiveModel {
   const delta =
     direction === "up"
-      ? 1
+      ? LINE_SCROLL_STEP
       : direction === "down"
-        ? -1
+        ? -LINE_SCROLL_STEP
         : direction === "page_up"
-          ? 10
+          ? PAGE_SCROLL_STEP
           : direction === "page_down"
-            ? -10
+            ? -PAGE_SCROLL_STEP
             : 0;
 
   return {
@@ -253,7 +256,7 @@ export function applyRuntimeEventToModel(
             tone: "warning"
           }
         ],
-        scrollOffset: 0
+        scrollOffset: state.scrollOffset
       };
     case "approval_resolved":
       return appendSystemLine(
@@ -296,7 +299,7 @@ export function applyRuntimeEventToModel(
             tone: "default"
           }
         ],
-        scrollOffset: 0
+        scrollOffset: state.scrollOffset
       };
     case "run_finished":
       return applyCommandResultToModel(state, event.result);
@@ -343,7 +346,7 @@ export function applyCommandResultToModel(
 
   return {
     ...next,
-    scrollOffset: 0
+    scrollOffset: state.scrollOffset
   };
 }
 
@@ -353,29 +356,41 @@ export function buildViewportLines(args: {
   rows: number;
 }): RenderLine[] {
   const width = Math.max(40, args.columns);
-  const transcriptLines = compactBlankLines(
-    args.model.blocks.flatMap((block) =>
-      renderBlock(block, {
-        approvalChoiceIndex: args.model.approvalChoiceIndex,
-        pendingApproval: args.model.pendingApproval,
-        width
-      })
-    )
-  );
-  const composerLines = renderComposer(args.model, width, transcriptLines.length > 0);
-  const full = [...transcriptLines, ...composerLines];
+  const full = buildFullRenderLines(args.model, width);
   const visibleHeight = Math.max(6, args.rows);
   const start = Math.max(0, full.length - visibleHeight - args.model.scrollOffset);
   const end = Math.min(full.length, start + visibleHeight);
   const viewport = full.slice(start, end);
   const shouldBottomAlign =
     viewport.length < visibleHeight &&
-    (args.model.blocks.length > 0 || args.model.input.trim().length > 0) &&
-    args.model.scrollOffset === 0;
+    args.model.blocks.length > 0 &&
+    args.model.scrollOffset === 0 &&
+    full.length >= Math.ceil(visibleHeight * LIVE_EDGE_BOTTOM_ALIGN_THRESHOLD);
 
   return shouldBottomAlign
     ? padViewportTop(viewport, visibleHeight)
     : viewport;
+}
+
+export function reconcileViewportScroll(
+  current: InteractiveModel,
+  next: InteractiveModel,
+  columns: number
+): InteractiveModel {
+  if (current.scrollOffset === 0 || next.scrollOffset !== current.scrollOffset) {
+    return next;
+  }
+
+  const width = Math.max(40, columns);
+  const delta = buildFullRenderLines(next, width).length - buildFullRenderLines(current, width).length;
+  if (delta <= 0) {
+    return next;
+  }
+
+  return {
+    ...next,
+    scrollOffset: current.scrollOffset + delta
+  };
 }
 
 export function estimateContextLeftPercent(state: InteractiveModel): number {
@@ -440,7 +455,7 @@ function appendSystemLine(
         tone
       }
     ],
-    scrollOffset: 0
+    scrollOffset: state.scrollOffset
   };
 }
 
@@ -469,7 +484,7 @@ function appendActivity(
           tone: activity.tone === "warning" ? "warning" : last.tone
         }
       ],
-      scrollOffset: 0
+      scrollOffset: state.scrollOffset
     };
   }
 
@@ -485,7 +500,7 @@ function appendActivity(
         tone: activity.tone
       }
     ],
-    scrollOffset: 0
+    scrollOffset: state.scrollOffset
   };
 }
 
@@ -503,7 +518,7 @@ function appendAssistantDelta(state: InteractiveModel, delta: string): Interacti
           lines: `${currentText}${delta}`.split("\n")
         }
       ],
-      scrollOffset: 0
+      scrollOffset: state.scrollOffset
     };
   }
 
@@ -518,8 +533,22 @@ function appendAssistantDelta(state: InteractiveModel, delta: string): Interacti
         tone: "default"
       }
     ],
-    scrollOffset: 0
+    scrollOffset: state.scrollOffset
   };
+}
+
+function buildFullRenderLines(model: InteractiveModel, width: number): RenderLine[] {
+  const transcriptLines = compactBlankLines(
+    model.blocks.flatMap((block) =>
+      renderBlock(block, {
+        approvalChoiceIndex: model.approvalChoiceIndex,
+        pendingApproval: model.pendingApproval,
+        width
+      })
+    )
+  );
+  const composerLines = renderComposer(model, width, transcriptLines.length > 0);
+  return [...transcriptLines, ...composerLines];
 }
 
 function renderBlock(
@@ -620,13 +649,13 @@ function renderComposer(state: InteractiveModel, width: number, hasTranscript: b
         ? "Type a task. Press Enter on empty input to resume the latest session."
         : "Type a task";
   const inputBody = state.input.length > 0 ? state.input : placeholder;
-  const inputLines = wrapForRender(inputBody, width - 6);
+  const inputLines = wrapForRender(inputBody, width - 8);
 
   const rendered = [
     ...inputLines.map((line, index) => ({
       backgroundColor: "#25282d",
       color: state.input.length > 0 ? "#f5f5f5" : "#9aa1a8",
-      text: `  ${padLine(index === inputLines.length - 1 && state.input.length > 0 ? `${line}█` : line, width - 4)}  `
+      text: `   ${padLine(index === inputLines.length - 1 && state.input.length > 0 ? `${line}█` : line, width - 6)}   `
     })),
     {
       dimColor: true,

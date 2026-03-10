@@ -13,6 +13,7 @@ import {
   createInteractiveModel,
   enqueuePrompt,
   nextQueuedPrompt,
+  reconcileViewportScroll,
   refreshRecentSessions,
   scrollInteractiveViewport,
   setInteractiveInput,
@@ -53,7 +54,11 @@ export function InteractiveApp(props: {
   const updateModel = useEffectEvent((updater: (current: InteractiveModel) => InteractiveModel) => {
     startTransition(() => {
       setModel((current) => {
-        const next = updater(current);
+        const next = reconcileViewportScroll(
+          current,
+          updater(current),
+          Math.max(60, stdout.columns ?? 80)
+        );
         modelRef.current = next;
         return next;
       });

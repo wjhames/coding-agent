@@ -5,7 +5,9 @@ import {
   buildViewportLines,
   createInteractiveModel,
   enqueuePrompt,
-  estimateContextLeftPercent
+  estimateContextLeftPercent,
+  reconcileViewportScroll,
+  setInteractiveInput
 } from "../../src/interactive/model.js";
 
 describe("interactive model", () => {
@@ -236,14 +238,21 @@ describe("interactive model", () => {
   });
 
   it("bottom-aligns an active conversation at the live edge", () => {
-    let model = createInteractiveModel({
-      cwd: "/workspace/project",
-      doctor: null,
-      recentSessions: []
-    });
+    const queued = enqueuePrompt(
+      createInteractiveModel({
+        cwd: "/workspace/project",
+        doctor: null,
+        recentSessions: []
+      }),
+      "Walk me through this codebase"
+    );
+    let model = queued.state;
 
-    const queued = enqueuePrompt(model, "Walk me through this codebase");
-    model = queued.state;
+    model = applyRuntimeEventToModel(model, {
+      at: "2026-03-10T10:00:00.000Z",
+      text: Array.from({ length: 12 }, (_, index) => `Line ${index + 1}`).join("\n"),
+      type: "assistant_message"
+    });
 
     const lines = buildViewportLines({
       columns: 80,
@@ -256,7 +265,81 @@ describe("interactive model", () => {
     expect(lines.at(-1)?.text).toContain("/workspace/project");
     expect(lines[0]?.text.trim()).toBe("");
     expect(userLineIndex).toBeGreaterThan(0);
-    expect(userLineIndex).toBeGreaterThan(lines.length - 6);
+    expect(userLineIndex).toBeLessThan(lines.length - 4);
+  });
+
+  it("does not bottom-align a short draft prompt", () => {
+    const model = setInteractiveInput(
+      createInteractiveModel({
+        cwd: "/workspace/project",
+        doctor: null,
+        recentSessions: []
+      }),
+      "draft prompt"
+    );
+    const lines = buildViewportLines({
+      columns: 80,
+      model,
+      rows: 20
+    });
+
+    expect(lines).toHaveLength(2);
+    expect(lines[0]?.text).toContain("draft prompt");
+  });
+
+  it("keeps the composer near the top while typing before submit", () => {
+    const model = setInteractiveInput(
+      createInteractiveModel({
+        cwd: "/workspace/project",
+        doctor: null,
+        recentSessions: []
+      }),
+      "draft prompt"
+    );
+
+    const lines = buildViewportLines({
+      columns: 80,
+      model,
+      rows: 20
+    });
+
+    expect(lines[0]?.text).toContain("draft prompt");
+    expect(lines.at(-1)?.text).toContain("/workspace/project");
+  });
+
+  it("preserves detached scroll while new lines stream in", () => {
+    const current = applyRuntimeEventToModel(
+      applyRuntimeEventToModel(
+        createInteractiveModel({
+          cwd: "/workspace/project",
+          doctor: null,
+          recentSessions: []
+        }),
+        {
+          at: "2026-03-10T10:00:00.000Z",
+          text: "First block\nSecond block\nThird block",
+          type: "assistant_message"
+        }
+      ),
+      {
+        at: "2026-03-10T10:00:01.000Z",
+        text: "Fourth block\nFifth block",
+        type: "assistant_message"
+      }
+    );
+
+    const detached = {
+      ...current,
+      scrollOffset: 6
+    };
+    const next = applyRuntimeEventToModel(detached, {
+      at: "2026-03-10T10:00:02.000Z",
+      delta: "\nSixth block",
+      type: "assistant_delta"
+    });
+    const reconciled = reconcileViewportScroll(detached, next, 80);
+
+    expect(reconciled.scrollOffset).toBeGreaterThan(detached.scrollOffset);
   });
 
   it("estimates remaining context conservatively", () => {
