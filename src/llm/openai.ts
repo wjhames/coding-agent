@@ -66,6 +66,13 @@ export interface ToolLoopResult {
 
 export class LlmError extends Error {}
 
+const DEFAULT_MAX_TOOL_ROUNDS = 12;
+const FINALIZE_TOOL_LOOP_PROMPT = [
+  "Stop calling tools.",
+  "Using only the completed tool results in this conversation, provide the best final answer now.",
+  "Be explicit about what was done, what remains, and any verification status."
+].join(" ");
+
 export function createOpenAICompatibleClient(
   config: OpenAICompatibleClientConfig
 ) {
@@ -103,7 +110,7 @@ export function createOpenAICompatibleClient(
           content: request.userPrompt
         }
       ];
-      const maxRounds = request.maxRounds ?? 4;
+      const maxRounds = request.maxRounds ?? DEFAULT_MAX_TOOL_ROUNDS;
 
       for (let round = 0; round < maxRounds; round += 1) {
         const payload = await sendRequest({
@@ -153,7 +160,36 @@ export function createOpenAICompatibleClient(
         }
       }
 
-      throw new LlmError("Model did not finish after tool execution rounds.");
+      const finalPayload = await sendRequest({
+        config,
+        fetchImpl,
+        messages: [
+          ...messages,
+          {
+            role: "user",
+            content: FINALIZE_TOOL_LOOP_PROMPT
+          }
+        ]
+      });
+      const finalMessage = finalPayload.choices[0]?.message;
+
+      if (!finalMessage) {
+        throw new LlmError(
+          `Model did not finish after ${maxRounds} tool rounds and did not return a final answer.`
+        );
+      }
+
+      const finalText = normalizeMessageContent(finalMessage.content);
+
+      if (finalText.length > 0) {
+        return {
+          text: finalText
+        };
+      }
+
+      throw new LlmError(
+        `Model did not finish after ${maxRounds} tool rounds. Increase --max-steps or use a model with stronger tool-use stopping behavior.`
+      );
     }
   };
 }

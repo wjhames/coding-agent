@@ -218,4 +218,109 @@ describe("createOpenAICompatibleClient", () => {
       summary: "Plan summary"
     });
   });
+
+  it("forces a final answer after hitting the tool round cap", async () => {
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            choices: [
+              {
+                message: {
+                  content: null,
+                  tool_calls: [
+                    {
+                      id: "call-1",
+                      type: "function",
+                      function: {
+                        name: "write_plan",
+                        arguments: JSON.stringify({
+                          summary: "Plan summary",
+                          items: [
+                            {
+                              content: "Inspect files",
+                              status: "in_progress"
+                            }
+                          ]
+                        })
+                      }
+                    }
+                  ]
+                }
+              }
+            ]
+          }),
+          {
+            status: 200,
+            headers: {
+              "content-type": "application/json"
+            }
+          }
+        )
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            choices: [
+              {
+                message: {
+                  content: "Final answer after forced stop."
+                }
+              }
+            ]
+          }),
+          {
+            status: 200,
+            headers: {
+              "content-type": "application/json"
+            }
+          }
+        )
+      );
+
+    const client = createOpenAICompatibleClient({
+      apiKey: "secret",
+      baseUrl: "http://localhost:1234/v1",
+      fetchImpl,
+      model: "gpt-4.1-mini"
+    });
+
+    await expect(
+      client.runTools({
+        maxRounds: 1,
+        systemPrompt: "system",
+        tools: [
+          {
+            description: "Write the plan.",
+            inputJsonSchema: {
+              type: "object"
+            },
+            inputSchema: z.object({
+              items: z.array(
+                z.object({
+                  content: z.string(),
+                  status: z.string()
+                })
+              ),
+              summary: z.string()
+            }),
+            name: "write_plan",
+            run: vi.fn().mockResolvedValue("{\"ok\":true}")
+          }
+        ],
+        userPrompt: "user"
+      })
+    ).resolves.toEqual({
+      text: "Final answer after forced stop."
+    });
+
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    const lastCall = fetchImpl.mock.calls[1];
+    expect(lastCall?.[1]).toEqual(
+      expect.objectContaining({
+        body: expect.stringContaining("Stop calling tools.")
+      })
+    );
+  });
 });
