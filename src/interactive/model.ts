@@ -281,6 +281,8 @@ export function applyRuntimeEventToModel(
           tone: event.verification.status === "failed" ? "warning" : "success"
         }
       );
+    case "assistant_delta":
+      return appendAssistantDelta(state, event.delta);
     case "assistant_message":
       return {
         ...state,
@@ -322,7 +324,7 @@ export function applyCommandResultToModel(
   } else if (
     result.status === "completed" &&
     result.summary.trim().length > 0 &&
-    lastAssistantText(next) !== result.summary.trim()
+    lastAssistantText(next) === null
   ) {
     next = {
       ...next,
@@ -476,6 +478,39 @@ function appendActivity(
   };
 }
 
+function appendAssistantDelta(state: InteractiveModel, delta: string): InteractiveModel {
+  const last = state.blocks.at(-1);
+
+  if (last?.kind === "assistant") {
+    const currentText = last.lines.join("\n");
+    return {
+      ...state,
+      blocks: [
+        ...state.blocks.slice(0, -1),
+        {
+          ...last,
+          lines: `${currentText}${delta}`.split("\n")
+        }
+      ],
+      scrollOffset: 0
+    };
+  }
+
+  return {
+    ...state,
+    blocks: [
+      ...state.blocks,
+      {
+        id: `assistant:${Date.now()}:${Math.random().toString(16).slice(2, 8)}`,
+        kind: "assistant",
+        lines: delta.split("\n"),
+        tone: "default"
+      }
+    ],
+    scrollOffset: 0
+  };
+}
+
 function renderBlock(
   block: TranscriptBlock,
   args: {
@@ -574,13 +609,13 @@ function renderComposer(state: InteractiveModel, width: number): RenderLine[] {
         ? "Type a task. Press Enter on empty input to resume the latest session."
         : "Type a task";
   const inputBody = state.input.length > 0 ? state.input : placeholder;
-  const inputLines = wrapForRender(inputBody, width - 4);
+  const inputLines = wrapForRender(inputBody, width - 6);
 
   const rendered = [
     ...inputLines.map((line, index) => ({
       backgroundColor: "#25282d",
       color: state.input.length > 0 ? "#f5f5f5" : "#9aa1a8",
-      text: ` ${padLine(index === inputLines.length - 1 && state.input.length > 0 ? `${line}█` : line, width - 2)} `
+      text: `  ${padLine(index === inputLines.length - 1 && state.input.length > 0 ? `${line}█` : line, width - 4)}  `
     })),
     {
       dimColor: true,

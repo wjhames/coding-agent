@@ -6,6 +6,55 @@ import {
 } from "../../../src/llm/openai.js";
 
 describe("createOpenAICompatibleClient", () => {
+  it("streams assistant deltas from an event-stream response", async () => {
+    const chunks = [
+      "data: {\"choices\":[{\"delta\":{\"content\":\"Hello \"}}]}\n\n",
+      "data: {\"choices\":[{\"delta\":{\"content\":\"world\"}}]}\n\n",
+      "data: [DONE]\n\n"
+    ];
+    const fetchImpl = vi.fn().mockResolvedValue(
+      new Response(
+        new ReadableStream({
+          start(controller) {
+            for (const chunk of chunks) {
+              controller.enqueue(new TextEncoder().encode(chunk));
+            }
+            controller.close();
+          }
+        }),
+        {
+          status: 200,
+          headers: {
+            "content-type": "text/event-stream"
+          }
+        }
+      )
+    );
+
+    const client = createOpenAICompatibleClient({
+      apiKey: "secret",
+      baseUrl: "http://localhost:1234/v1",
+      fetchImpl,
+      model: "gpt-4.1-mini"
+    });
+    const deltas: string[] = [];
+
+    await expect(
+      client.runTools({
+        onTextDelta(delta) {
+          deltas.push(delta);
+        },
+        systemPrompt: "system",
+        tools: [],
+        userPrompt: "user"
+      })
+    ).resolves.toEqual({
+      text: "Hello world"
+    });
+
+    expect(deltas).toEqual(["Hello ", "world"]);
+  });
+
   it("sends a chat completion request and returns string content", async () => {
     const fetchImpl = vi.fn().mockResolvedValue(
       new Response(

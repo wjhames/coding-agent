@@ -83,6 +83,29 @@ describe("interactive model", () => {
     ]);
   });
 
+  it("appends assistant deltas into a single live assistant block", () => {
+    let model = createInteractiveModel({
+      cwd: "/workspace/project",
+      doctor: null,
+      recentSessions: []
+    });
+
+    model = applyRuntimeEventToModel(model, {
+      at: "2026-03-10T10:00:00.000Z",
+      delta: "Hello ",
+      type: "assistant_delta"
+    });
+    model = applyRuntimeEventToModel(model, {
+      at: "2026-03-10T10:00:01.000Z",
+      delta: "world",
+      type: "assistant_delta"
+    });
+
+    expect(model.blocks).toHaveLength(1);
+    expect(model.blocks[0]?.kind).toBe("assistant");
+    expect(model.blocks[0]?.lines.join("\n")).toBe("Hello world");
+  });
+
   it("keeps plan state when plan updates stream into the transcript", () => {
     const model = applyRuntimeEventToModel(
       createInteractiveModel({

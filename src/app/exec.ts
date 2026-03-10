@@ -454,11 +454,6 @@ async function executeTask(args: {
     });
     emitRuntimeEvent(args.observer, {
       at: new Date().toISOString(),
-      text: finalSummary,
-      type: "assistant_message"
-    });
-    emitRuntimeEvent(args.observer, {
-      at: new Date().toISOString(),
       result,
       type: "run_finished"
     });
@@ -617,6 +612,13 @@ async function runModelLoop(args: {
   });
   const toolResult = await args.client.runTools({
     maxRounds: args.config.maxSteps ?? 8,
+    onTextDelta(delta) {
+      emitRuntimeEvent(args.observer, {
+        at: new Date().toISOString(),
+        delta,
+        type: "assistant_delta"
+      });
+    },
     systemPrompt: buildSystemPrompt({
       config: args.config,
       readOnlyTask: args.readOnlyTask

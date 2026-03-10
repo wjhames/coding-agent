@@ -56,6 +56,7 @@ export interface LlmTool {
 
 export interface ToolLoopRequest {
   maxRounds?: number;
+  onTextDelta?: ((delta: string) => void) | undefined;
   systemPrompt: string;
   tools: LlmTool[];
   userPrompt: string;
@@ -114,13 +115,13 @@ export function createOpenAICompatibleClient(
       const maxRounds = request.maxRounds ?? DEFAULT_MAX_TOOL_ROUNDS;
 
       for (let round = 0; round < maxRounds; round += 1) {
-        const payload = await sendRequest({
+        const message = await sendToolLoopMessage({
           config,
           fetchImpl,
           messages,
+          onTextDelta: request.onTextDelta,
           tools: request.tools
         });
-        const message = payload.choices[0]?.message;
 
         if (!message) {
           throw new LlmError("OpenAI-compatible response did not include a message.");
@@ -154,7 +155,7 @@ export function createOpenAICompatibleClient(
         }
       }
 
-      const finalPayload = await sendRequest({
+      const finalMessage = await sendToolLoopMessage({
         config,
         fetchImpl,
         messages: [
@@ -163,9 +164,9 @@ export function createOpenAICompatibleClient(
             role: "user",
             content: FINALIZE_TOOL_LOOP_PROMPT
           }
-        ]
+        ],
+        onTextDelta: request.onTextDelta
       });
-      const finalMessage = finalPayload.choices[0]?.message;
 
       if (!finalMessage) {
         throw new LlmError(
@@ -231,6 +232,57 @@ async function sendRequest(args: {
   return chatCompletionResponseSchema.parse(await response.json());
 }
 
+async function sendToolLoopMessage(args: {
+  config: OpenAICompatibleClientConfig;
+  fetchImpl: typeof fetch;
+  messages: Array<Record<string, unknown>>;
+  onTextDelta?: ((delta: string) => void) | undefined;
+  tools?: LlmTool[];
+}) {
+  const response = await args.fetchImpl(
+    `${args.config.baseUrl.replace(/\/+$/, "")}/chat/completions`,
+    {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${args.config.apiKey}`,
+        "content-type": "application/json"
+      },
+      body: JSON.stringify({
+        model: args.config.model,
+        messages: args.messages,
+        stream: true,
+        ...(args.tools
+          ? {
+              tool_choice: "auto",
+              tools: args.tools.map((tool) => ({
+                type: "function",
+                function: {
+                  name: tool.name,
+                  description: tool.description,
+                  parameters: tool.inputJsonSchema
+                }
+              }))
+            }
+          : {})
+      })
+    }
+  );
+
+  if (!response.ok) {
+    throw new LlmError(
+      `OpenAI-compatible request failed with status ${response.status}.`
+    );
+  }
+
+  const contentType = response.headers.get("content-type") ?? "";
+  if (!contentType.includes("text/event-stream") || !response.body) {
+    const payload = chatCompletionResponseSchema.parse(await response.json());
+    return payload.choices[0]?.message;
+  }
+
+  return readStreamingMessage(response.body, args.onTextDelta);
+}
+
 function extractMessageText(
   message: z.infer<typeof chatCompletionResponseSchema>["choices"][number]["message"] | undefined
 ): string {
@@ -265,6 +317,154 @@ function normalizeMessageContent(content: unknown): string {
     .map((part) => part.text)
     .join("")
     .trim();
+}
+
+async function readStreamingMessage(
+  body: ReadableStream<Uint8Array>,
+  onTextDelta?: (delta: string) => void
+): Promise<z.infer<typeof chatCompletionResponseSchema>["choices"][number]["message"]> {
+  const reader = body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let content = "";
+  const toolCalls = new Map<number, z.infer<typeof toolCallSchema>>();
+
+  while (true) {
+    const chunk = await reader.read();
+    if (chunk.done) {
+      break;
+    }
+
+    buffer += decoder.decode(chunk.value, { stream: true });
+    let boundary = buffer.indexOf("\n\n");
+
+    while (boundary !== -1) {
+      const frame = buffer.slice(0, boundary);
+      buffer = buffer.slice(boundary + 2);
+      handleSseFrame(frame, {
+        onTextDelta,
+        onToolCallDelta(index, delta) {
+          const current =
+            toolCalls.get(index) ??
+            ({
+              id: delta.id ?? `tool-${index}`,
+              type: "function",
+              function: {
+                arguments: "",
+                name: ""
+              }
+            } satisfies z.infer<typeof toolCallSchema>);
+
+          toolCalls.set(index, {
+            id: delta.id ?? current.id,
+            type: "function",
+            function: {
+              arguments: `${current.function.arguments}${delta.function?.arguments ?? ""}`,
+              name: delta.function?.name ?? current.function.name
+            }
+          });
+        },
+        pushContent(delta) {
+          content += delta;
+        }
+      });
+      boundary = buffer.indexOf("\n\n");
+    }
+  }
+
+  return {
+    ...(content.length > 0 ? { content } : { content: null }),
+    ...(toolCalls.size > 0
+      ? {
+          tool_calls: [...toolCalls.entries()]
+            .sort((left, right) => left[0] - right[0])
+            .map((entry) => entry[1])
+        }
+      : {})
+  };
+}
+
+function handleSseFrame(
+  frame: string,
+  handlers: {
+    onTextDelta?: ((delta: string) => void) | undefined;
+    onToolCallDelta: (
+      index: number,
+      delta: {
+        function?: {
+          arguments?: string | undefined;
+          name?: string | undefined;
+        } | undefined;
+        id?: string | undefined;
+      }
+    ) => void;
+    pushContent: (delta: string) => void;
+  }
+): void {
+  const dataLines = frame
+    .split("\n")
+    .filter((line) => line.startsWith("data:"))
+    .map((line) => line.slice(5).trim())
+    .filter((line) => line.length > 0);
+
+  for (const line of dataLines) {
+    if (line === "[DONE]") {
+      continue;
+    }
+
+    const payload = JSON.parse(line) as {
+      choices?: Array<{
+        delta?: {
+          content?: string | Array<{ text?: string; type?: string }> | null;
+          tool_calls?: Array<{
+            function?: {
+              arguments?: string;
+              name?: string;
+            };
+            id?: string;
+            index?: number;
+          }>;
+        };
+      }>;
+    };
+
+    for (const choice of payload.choices ?? []) {
+      const delta = choice.delta;
+      if (!delta) {
+        continue;
+      }
+
+      const contentDelta = normalizeStreamingContent(delta.content);
+      if (contentDelta.length > 0) {
+        handlers.pushContent(contentDelta);
+        handlers.onTextDelta?.(contentDelta);
+      }
+
+      for (const toolCall of delta.tool_calls ?? []) {
+        handlers.onToolCallDelta(toolCall.index ?? 0, {
+          ...(toolCall.function ? { function: toolCall.function } : {}),
+          ...(toolCall.id ? { id: toolCall.id } : {})
+        });
+      }
+    }
+  }
+}
+
+function normalizeStreamingContent(
+  content: string | Array<{ text?: string; type?: string }> | null | undefined
+): string {
+  if (typeof content === "string") {
+    return content;
+  }
+
+  if (!Array.isArray(content)) {
+    return "";
+  }
+
+  return content
+    .filter((part) => part.type === "text" && typeof part.text === "string")
+    .map((part) => part.text)
+    .join("");
 }
 
 function parseToolArguments(raw: string): unknown {

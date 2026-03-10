@@ -296,6 +296,11 @@ export type RuntimeEvent =
     }
   | {
       at: string;
+      delta: string;
+      type: "assistant_delta";
+    }
+  | {
+      at: string;
       text: string;
       type: "assistant_message";
     }

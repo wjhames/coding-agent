@@ -1,11 +1,4 @@
-import React, {
-  startTransition,
-  useEffect,
-  useEffectEvent,
-  useMemo,
-  useRef,
-  useState
-} from "react";
+import React, { startTransition, useEffect, useEffectEvent, useMemo, useRef, useState } from "react";
 import { Box, Text, useApp, useInput, useStdout } from "ink";
 import type { ParsedOptions } from "../cli/parse.js";
 import type { RuntimeDoctor, RuntimeEnvironment } from "../runtime/api.js";
@@ -25,8 +18,7 @@ import {
   setInteractiveInput,
   toggleApprovalChoice,
   trimInteractiveInput,
-  type InteractiveModel,
-  type TranscriptBlock
+  type InteractiveModel
 } from "./model.js";
 
 interface InteractiveExit {
@@ -53,48 +45,10 @@ export function InteractiveApp(props: {
   );
   const runActiveRef = useRef(false);
   const modelRef = useRef(model);
-  const [revealedAssistantChars, setRevealedAssistantChars] = useState<Record<string, number>>({});
 
   useEffect(() => {
     modelRef.current = model;
   }, [model]);
-
-  useEffect(() => {
-    const latestAssistant = [...model.blocks].reverse().find((block) => block.kind === "assistant");
-
-    if (!latestAssistant) {
-      return;
-    }
-
-    const targetLength = latestAssistant.lines.join("\n").length;
-    if (!(latestAssistant.id in revealedAssistantChars)) {
-      setRevealedAssistantChars((current) => ({
-        ...current,
-        [latestAssistant.id]: 0
-      }));
-      return;
-    }
-
-    const currentLength = revealedAssistantChars[latestAssistant.id] ?? 0;
-
-    if (currentLength >= targetLength) {
-      return;
-    }
-
-    const timer = setInterval(() => {
-      setRevealedAssistantChars((current) => {
-        const nextLength = Math.min(targetLength, (current[latestAssistant.id] ?? 0) + 48);
-        return {
-          ...current,
-          [latestAssistant.id]: nextLength
-        };
-      });
-    }, 16);
-
-    return () => {
-      clearInterval(timer);
-    };
-  }, [model.blocks, revealedAssistantChars]);
 
   const updateModel = useEffectEvent((updater: (current: InteractiveModel) => InteractiveModel) => {
     startTransition(() => {
@@ -333,10 +287,10 @@ export function InteractiveApp(props: {
     const columns = Math.max(60, stdout.columns ?? 80);
     return buildViewportLines({
       columns,
-      model: applyAssistantReveal(model, revealedAssistantChars),
+      model,
       rows
     });
-  }, [model, revealedAssistantChars, stdout.columns, stdout.rows]);
+  }, [model, stdout.columns, stdout.rows]);
 
   return (
     <Box flexDirection="column">
@@ -354,26 +308,4 @@ export function InteractiveApp(props: {
       ))}
     </Box>
   );
-}
-
-function applyAssistantReveal(
-  model: InteractiveModel,
-  revealedAssistantChars: Record<string, number>
-): InteractiveModel {
-  return {
-    ...model,
-    blocks: model.blocks.map((block) => {
-      if (block.kind !== "assistant") {
-        return block;
-      }
-
-      const fullText = block.lines.join("\n");
-      const visibleChars = revealedAssistantChars[block.id] ?? fullText.length;
-
-      return {
-        ...block,
-        lines: fullText.slice(0, visibleChars).split("\n")
-      } satisfies TranscriptBlock;
-    })
-  };
 }
