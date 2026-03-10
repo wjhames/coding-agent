@@ -210,6 +210,31 @@ describe("interactive model", () => {
     expect(metadata).not.toContain("agent:");
   });
 
+  it("keeps the composer tight to the transcript", () => {
+    let model = createInteractiveModel({
+      cwd: "/workspace/project",
+      doctor: null,
+      recentSessions: []
+    });
+
+    model = applyRuntimeEventToModel(model, {
+      at: "2026-03-10T10:00:00.000Z",
+      text: "Line one\n\n\nLine two\n",
+      type: "assistant_message"
+    });
+
+    const lines = buildViewportLines({
+      columns: 80,
+      model,
+      rows: 20
+    });
+    const composerIndex = lines.findIndex((line) => line.text.includes("Type a task"));
+
+    expect(composerIndex).toBeGreaterThan(0);
+    expect(lines[composerIndex - 1]?.text).toBe("");
+    expect(lines[composerIndex - 2]?.text).not.toBe("");
+  });
+
   it("estimates remaining context conservatively", () => {
     const model = createInteractiveModel({
       cwd: "/workspace/project",

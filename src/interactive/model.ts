@@ -352,14 +352,16 @@ export function buildViewportLines(args: {
   rows: number;
 }): RenderLine[] {
   const width = Math.max(40, args.columns);
-  const transcriptLines = args.model.blocks.flatMap((block) =>
-    renderBlock(block, {
-      approvalChoiceIndex: args.model.approvalChoiceIndex,
-      pendingApproval: args.model.pendingApproval,
-      width
-    })
+  const transcriptLines = compactBlankLines(
+    args.model.blocks.flatMap((block) =>
+      renderBlock(block, {
+        approvalChoiceIndex: args.model.approvalChoiceIndex,
+        pendingApproval: args.model.pendingApproval,
+        width
+      })
+    )
   );
-  const composerLines = renderComposer(args.model, width);
+  const composerLines = renderComposer(args.model, width, transcriptLines.length > 0);
   const full = [...transcriptLines, ...composerLines];
   const visibleHeight = Math.max(6, args.rows);
   const start = Math.max(0, full.length - visibleHeight - args.model.scrollOffset);
@@ -601,7 +603,7 @@ function renderLabeledBlock(
   return lines;
 }
 
-function renderComposer(state: InteractiveModel, width: number): RenderLine[] {
+function renderComposer(state: InteractiveModel, width: number, hasTranscript: boolean): RenderLine[] {
   const placeholder =
     state.pendingApproval !== null && state.input.length === 0
       ? "Enter approves selected action. Type to queue the next prompt."
@@ -625,7 +627,26 @@ function renderComposer(state: InteractiveModel, width: number): RenderLine[] {
     }
   ];
 
-  return state.blocks.length > 0 ? [{ text: "" }, ...rendered] : rendered;
+  return hasTranscript ? [{ text: "" }, ...rendered] : rendered;
+}
+
+function compactBlankLines(lines: RenderLine[]): RenderLine[] {
+  const compacted: RenderLine[] = [];
+
+  for (const line of lines) {
+    const isBlank = line.text.length === 0;
+    const previous = compacted.at(-1);
+    if (isBlank && previous?.text.length === 0) {
+      continue;
+    }
+    compacted.push(line);
+  }
+
+  while (compacted.at(-1)?.text.length === 0) {
+    compacted.pop();
+  }
+
+  return compacted;
 }
 
 function toolCalledToActivity(
