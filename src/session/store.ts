@@ -3,6 +3,8 @@ import { readdir, readFile, writeFile } from "node:fs/promises";
 import { basename } from "node:path";
 import { z } from "zod";
 import type {
+  Approval,
+  Artifact,
   Observation,
   PlanState,
   RepoContextSummary,
@@ -31,18 +33,70 @@ const observationSchema = z.object({
   path: z.string().optional(),
   query: z.string().optional(),
   summary: z.string(),
-  tool: z.enum(["list_files", "read_file", "search_files"])
+  tool: z.enum(["apply_patch", "list_files", "read_file", "run_shell", "search_files"])
+});
+const artifactSchema = z.object({
+  diff: z.string(),
+  kind: z.literal("diff"),
+  path: z.string()
+});
+const approvalSchema = z.object({
+  command: z.string().optional(),
+  id: z.string(),
+  reason: z.string(),
+  status: z.enum(["approved", "pending", "rejected"]),
+  summary: z.string(),
+  tool: z.enum(["apply_patch", "run_shell"])
+});
+const patchReplaceSchema = z.object({
+  newText: z.string(),
+  oldText: z.string(),
+  path: z.string(),
+  type: z.literal("replace")
+});
+const patchCreateSchema = z.object({
+  content: z.string(),
+  path: z.string(),
+  type: z.literal("create")
+});
+const patchDeleteSchema = z.object({
+  path: z.string(),
+  type: z.literal("delete")
+});
+const pendingPatchSchema = z.object({
+  approval: approvalSchema,
+  action: z.object({
+    operations: z.array(z.discriminatedUnion("type", [patchReplaceSchema, patchCreateSchema, patchDeleteSchema]))
+  }),
+  tool: z.literal("apply_patch")
+});
+const pendingShellSchema = z.object({
+  approval: approvalSchema,
+  action: z.object({
+    command: z.string(),
+    justification: z.string().optional()
+  }),
+  tool: z.literal("run_shell")
 });
 const verificationSchema = z.object({
   commands: z.array(z.string()),
   inferred: z.boolean(),
-  passed: z.boolean()
+  passed: z.boolean(),
+  runs: z.array(
+    z.object({
+      command: z.string(),
+      exitCode: z.number().int(),
+      passed: z.boolean(),
+      stderr: z.string(),
+      stdout: z.string()
+    })
+  )
 });
 
 export const sessionRecordSchema = z
   .object({
-    approvals: z.array(z.string()),
-    artifacts: z.array(z.string()),
+    approvals: z.array(approvalSchema),
+    artifacts: z.array(artifactSchema),
     changedFiles: z.array(z.string()),
     config: z
       .object({
@@ -61,6 +115,7 @@ export const sessionRecordSchema = z
     mode: sessionModeSchema,
     nextActions: z.array(z.string()),
     observations: z.array(observationSchema),
+    pendingAction: z.union([pendingPatchSchema, pendingShellSchema]).nullable(),
     plan: planStateSchema.nullable(),
     prompt: z.string(),
     repoContext: repoContextSchema,
@@ -76,14 +131,15 @@ export type SessionMode = z.infer<typeof sessionModeSchema>;
 export type SessionRecord = z.infer<typeof sessionRecordSchema>;
 
 export interface CreateSessionInput {
-  approvals?: string[];
-  artifacts?: string[];
+  approvals?: Approval[];
+  artifacts?: Artifact[];
   changedFiles?: string[];
   config: SessionRecord["config"];
   cwd: string;
   mode: SessionMode;
   nextActions?: string[];
   observations?: Observation[];
+  pendingAction?: SessionRecord["pendingAction"];
   plan?: PlanState | null;
   prompt: string;
   repoContext: RepoContextSummary;
@@ -110,6 +166,7 @@ export async function createSession(
     mode: input.mode,
     nextActions: input.nextActions ?? [],
     observations: input.observations ?? [],
+    pendingAction: input.pendingAction ?? null,
     plan: input.plan ?? null,
     prompt: input.prompt,
     repoContext: input.repoContext,
@@ -119,8 +176,51 @@ export async function createSession(
     verification: input.verification ?? {
       commands: [],
       inferred: false,
-      passed: false
+      passed: false,
+      runs: []
     }
+  };
+
+  await saveSession(session, homeDir);
+  return session;
+}
+
+export async function updateSession(
+  sessionId: string,
+  input: Omit<CreateSessionInput, "cwd" | "mode" | "prompt" | "repoContext"> & {
+    cwd: string;
+    mode: SessionMode;
+    prompt: string;
+    repoContext: RepoContextSummary;
+    status: SessionStatus;
+    summary: string;
+  },
+  homeDir?: string
+): Promise<SessionRecord> {
+  const existing = await loadSession(sessionId, homeDir);
+
+  if (!existing) {
+    throw new SessionStoreError(`Session \`${sessionId}\` was not found.`);
+  }
+
+  const session: SessionRecord = {
+    ...existing,
+    approvals: input.approvals ?? existing.approvals,
+    artifacts: input.artifacts ?? existing.artifacts,
+    changedFiles: input.changedFiles ?? existing.changedFiles,
+    config: input.config,
+    cwd: input.cwd,
+    mode: input.mode,
+    nextActions: input.nextActions ?? existing.nextActions,
+    observations: input.observations ?? existing.observations,
+    pendingAction: input.pendingAction ?? existing.pendingAction,
+    plan: input.plan ?? existing.plan,
+    prompt: input.prompt,
+    repoContext: input.repoContext,
+    status: input.status,
+    summary: input.summary,
+    updatedAt: new Date().toISOString(),
+    verification: input.verification ?? existing.verification
   };
 
   await saveSession(session, homeDir);

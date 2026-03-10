@@ -55,7 +55,16 @@ describe("session store", () => {
         verification: {
           commands: ["npm test"],
           inferred: true,
-          passed: true
+          passed: true,
+          runs: [
+            {
+              command: "npm test",
+              exitCode: 0,
+              passed: true,
+              stderr: "",
+              stdout: "ok"
+            }
+          ]
         }
       },
       homeDir
@@ -82,7 +91,13 @@ describe("session store", () => {
         },
         prompt: "first",
         status: "completed",
-        summary: "first"
+        summary: "first",
+        verification: {
+          commands: [],
+          inferred: true,
+          passed: true,
+          runs: []
+        }
       },
       homeDir
     );
@@ -102,7 +117,13 @@ describe("session store", () => {
         },
         prompt: "second",
         status: "paused",
-        summary: "second"
+        summary: "second",
+        verification: {
+          commands: [],
+          inferred: true,
+          passed: true,
+          runs: []
+        }
       },
       homeDir
     );

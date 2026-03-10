@@ -1,0 +1,19 @@
+import type { CommandResult } from "../cli/output.js";
+import type { SessionRecord } from "../session/store.js";
+
+export function resultFromSession(session: SessionRecord): CommandResult {
+  return {
+    approvals: session.approvals,
+    artifacts: session.artifacts,
+    changedFiles: session.changedFiles,
+    exitCode: session.status === "paused" ? 2 : session.status === "completed" ? 0 : 1,
+    nextActions: session.nextActions,
+    observations: session.observations,
+    plan: session.plan,
+    repoContext: session.repoContext,
+    sessionId: session.id,
+    status: session.status,
+    summary: session.summary,
+    verification: session.verification
+  };
+}

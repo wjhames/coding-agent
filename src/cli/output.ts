@@ -22,21 +22,45 @@ export interface Observation {
   query?: string | undefined;
   path?: string | undefined;
   summary: string;
-  tool: "list_files" | "read_file" | "search_files";
+  tool: "apply_patch" | "list_files" | "read_file" | "run_shell" | "search_files";
+}
+
+export interface Artifact {
+  diff: string;
+  kind: "diff";
+  path: string;
+}
+
+export interface Approval {
+  command?: string | undefined;
+  id: string;
+  reason: string;
+  status: "approved" | "pending" | "rejected";
+  summary: string;
+  tool: "apply_patch" | "run_shell";
+}
+
+export interface VerificationRun {
+  command: string;
+  exitCode: number;
+  passed: boolean;
+  stderr: string;
+  stdout: string;
 }
 
 export interface VerificationSummary {
   commands: string[];
   inferred: boolean;
   passed: boolean;
+  runs: VerificationRun[];
 }
 
 export interface CommandResult {
-  artifacts: string[];
-  verification: VerificationSummary;
-  approvals: string[];
-  exitCode: 0 | 1 | 2;
+  approvals: Approval[];
+  artifacts: Artifact[];
   changedFiles: string[];
+  verification: VerificationSummary;
+  exitCode: 0 | 1 | 2;
   nextActions: string[];
   observations: Observation[];
   plan: PlanState | null;

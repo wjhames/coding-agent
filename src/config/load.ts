@@ -58,7 +58,7 @@ export function resolveExecutionConfig(args: {
 
   return {
     approvalPolicy:
-      normalizeApprovalPolicy(cliOptions.approvalPolicy) ?? profile?.approvalPolicy,
+      normalizeApprovalPolicy(cliOptions.approvalPolicy) ?? profile?.approvalPolicy ?? "prompt",
     baseUrl: cliOptions.baseUrl ?? profile?.baseUrl ?? DEFAULT_OPENAI_BASE_URL,
     maxSteps: cliOptions.maxSteps ?? profile?.maxSteps,
     model: cliOptions.model ?? profile?.model,
