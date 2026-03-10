@@ -25,6 +25,31 @@ export async function walkWorkspaceFiles(args: {
 }): Promise<string[]> {
   const root = resolveWorkspacePath(args.cwd, args.path);
   const files: string[] = [];
+  const requestedPath = args.path ?? ".";
+
+  let rootStat;
+  try {
+    rootStat = await stat(root);
+  } catch (error) {
+    if (
+      typeof error === "object" &&
+      error !== null &&
+      "code" in error &&
+      error.code === "ENOENT"
+    ) {
+      throw new Error(`Requested path was not found: \`${requestedPath}\`.`);
+    }
+
+    throw error;
+  }
+
+  if (rootStat.isFile()) {
+    return [relative(args.cwd, root)].sort();
+  }
+
+  if (!rootStat.isDirectory()) {
+    throw new Error(`Requested path is not a file or directory: \`${requestedPath}\`.`);
+  }
 
   await walk(root, files, args.limit);
 

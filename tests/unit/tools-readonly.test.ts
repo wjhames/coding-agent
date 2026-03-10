@@ -28,6 +28,20 @@ describe("read-only tools", () => {
     expect(observations).toHaveLength(1);
   });
 
+  it("lists a single file when given a file path", async () => {
+    const cwd = await makeWorkspace();
+    const tool = createListFilesTool({
+      cwd,
+      observe: () => {}
+    });
+
+    await expect(
+      tool.run({
+        path: "src/config.ts"
+      })
+    ).resolves.toBe("src/config.ts");
+  });
+
   it("reads a file with line numbers", async () => {
     const cwd = await makeWorkspace();
     const observations: unknown[] = [];
@@ -66,6 +80,21 @@ describe("read-only tools", () => {
     expect(observations).toHaveLength(1);
   });
 
+  it("searches a single file when given a file path", async () => {
+    const cwd = await makeWorkspace();
+    const tool = createSearchFilesTool({
+      cwd,
+      observe: () => {}
+    });
+
+    await expect(
+      tool.run({
+        path: "src/config.ts",
+        query: "value = 1"
+      })
+    ).resolves.toContain("src/config.ts:1:");
+  });
+
   it("returns a normal error when asked to read a directory", async () => {
     const cwd = await makeWorkspace();
     const tool = createReadFileTool({
@@ -92,6 +121,20 @@ describe("read-only tools", () => {
         path: "README.missing"
       })
     ).rejects.toThrow("Requested path was not found: `README.missing`.");
+  });
+
+  it("returns a normal error when listing a missing path", async () => {
+    const cwd = await makeWorkspace();
+    const tool = createListFilesTool({
+      cwd,
+      observe: () => {}
+    });
+
+    await expect(
+      tool.run({
+        path: "missing-dir"
+      })
+    ).rejects.toThrow("Requested path was not found: `missing-dir`.");
   });
 });
 
