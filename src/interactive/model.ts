@@ -366,7 +366,15 @@ export function buildViewportLines(args: {
   const visibleHeight = Math.max(6, args.rows);
   const start = Math.max(0, full.length - visibleHeight - args.model.scrollOffset);
   const end = Math.min(full.length, start + visibleHeight);
-  return full.slice(start, end);
+  const viewport = full.slice(start, end);
+  const shouldBottomAlign =
+    viewport.length < visibleHeight &&
+    (args.model.blocks.length > 0 || args.model.input.trim().length > 0) &&
+    args.model.scrollOffset === 0;
+
+  return shouldBottomAlign
+    ? padViewportTop(viewport, visibleHeight)
+    : viewport;
 }
 
 export function estimateContextLeftPercent(state: InteractiveModel): number {
@@ -647,6 +655,17 @@ function compactBlankLines(lines: RenderLine[]): RenderLine[] {
   }
 
   return compacted;
+}
+
+function padViewportTop(lines: RenderLine[], height: number): RenderLine[] {
+  if (lines.length >= height) {
+    return lines;
+  }
+
+  return [
+    ...Array.from({ length: height - lines.length }, () => ({ text: "" })),
+    ...lines
+  ];
 }
 
 function toolCalledToActivity(

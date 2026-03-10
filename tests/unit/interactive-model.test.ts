@@ -235,6 +235,30 @@ describe("interactive model", () => {
     expect(lines[composerIndex - 2]?.text).not.toBe("");
   });
 
+  it("bottom-aligns an active conversation at the live edge", () => {
+    let model = createInteractiveModel({
+      cwd: "/workspace/project",
+      doctor: null,
+      recentSessions: []
+    });
+
+    const queued = enqueuePrompt(model, "Walk me through this codebase");
+    model = queued.state;
+
+    const lines = buildViewportLines({
+      columns: 80,
+      model,
+      rows: 20
+    });
+    const userLineIndex = lines.findIndex((line) => line.text.includes("Walk me through this codebase"));
+
+    expect(lines).toHaveLength(20);
+    expect(lines.at(-1)?.text).toContain("/workspace/project");
+    expect(lines[0]?.text).toBe("");
+    expect(userLineIndex).toBeGreaterThan(0);
+    expect(userLineIndex).toBeGreaterThan(lines.length - 6);
+  });
+
   it("estimates remaining context conservatively", () => {
     const model = createInteractiveModel({
       cwd: "/workspace/project",
