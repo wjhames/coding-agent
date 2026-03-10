@@ -96,6 +96,8 @@ export async function runCli(
     }
 
     const result = await runResume({
+      fetchImpl: runtime.fetchImpl,
+      options: invocation.options,
       sessionHomeDir: runtime.sessionHomeDir,
       sessionId: invocation.sessionId
     });

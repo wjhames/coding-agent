@@ -1,7 +1,12 @@
 import type { CommandResult } from "../cli/output.js";
+import { continueExec } from "./exec.js";
+import { resultFromSession } from "./result.js";
 import { listRecentSessions, loadSession } from "../session/store.js";
+import type { ParsedOptions } from "../cli/parse.js";
 
 export async function runResume(args: {
+  fetchImpl: typeof fetch | undefined;
+  options: ParsedOptions;
   sessionHomeDir: string | undefined;
   sessionId: string | undefined;
 }): Promise<CommandResult | null> {
@@ -13,19 +18,22 @@ export async function runResume(args: {
     return null;
   }
 
+  if (session.status !== "paused") {
+    return {
+      ...resultFromSession(session),
+      resumedFrom: session.id
+    };
+  }
+
+  const result = await continueExec({
+    fetchImpl: args.fetchImpl,
+    options: args.options,
+    session,
+    sessionHomeDir: args.sessionHomeDir
+  });
+
   return {
-    artifacts: session.artifacts,
-    verification: session.verification,
-    approvals: session.approvals,
-    exitCode: session.status === "paused" ? 2 : session.status === "completed" ? 0 : 1,
-    changedFiles: session.changedFiles,
-    nextActions: session.nextActions,
-    observations: session.observations,
-    plan: session.plan,
-    repoContext: session.repoContext,
-    resumedFrom: session.id,
-    sessionId: session.id,
-    status: session.status,
-    summary: session.summary
+    ...result,
+    resumedFrom: session.id
   };
 }

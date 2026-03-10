@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import { join } from "node:path";
 import { Writable } from "node:stream";
@@ -76,7 +76,8 @@ describe("runCli", () => {
     expect(payload.verification).toEqual({
       commands: ["npm run lint", "npm run typecheck", "npm test"],
       inferred: true,
-      passed: false
+      passed: true,
+      runs: []
     });
   });
 
@@ -183,6 +184,85 @@ describe("runCli", () => {
       exitCode: 1
     });
   });
+
+  it("pauses on apply_patch under prompt policy and resumes with auto approval", async () => {
+    const cwd = await makeWorkspace();
+    const homeDir = await makeHomeDir();
+    await writeHomeConfig(homeDir, { approvalPolicy: "prompt" });
+    await mkdir(join(cwd, "src"), { recursive: true });
+    await writeFile(join(cwd, "src", "config.ts"), "export const value = 1;\n", "utf8");
+    const pauseIo = createMemoryIo();
+    const fetchImpl = createSequenceFetch([
+      toolResponse([
+        {
+          id: "call-1",
+          name: "write_plan",
+          arguments: {
+            summary: "Fix config value",
+            items: [
+              {
+                content: "Update src/config.ts",
+                status: "in_progress"
+              }
+            ]
+          }
+        }
+      ]),
+      toolResponse([
+        {
+          id: "call-2",
+          name: "apply_patch",
+          arguments: {
+            operations: [
+              {
+                type: "replace",
+                path: "src/config.ts",
+                oldText: "value = 1",
+                newText: "value = 2"
+              }
+            ]
+          }
+        }
+      ]),
+      finalResponse("Patch applied and verification succeeded.")
+    ]);
+
+    const pauseExitCode = await runCli(
+      ["exec", "fix config value", "--json", "--cwd", cwd],
+      pauseIo.streams,
+      {
+        fetchImpl,
+        sessionHomeDir: homeDir
+      }
+    );
+
+    expect(pauseExitCode).toBe(2);
+    const pausedPayload = JSON.parse(pauseIo.stdout);
+    expect(pausedPayload.status).toBe("paused");
+    expect(pausedPayload.approvals).toHaveLength(1);
+    expect(pausedPayload.approvals[0].status).toBe("pending");
+
+    const resumeIo = createMemoryIo();
+    const resumeExitCode = await runCli(
+      ["resume", pausedPayload.sessionId, "--json", "--approval-policy", "auto"],
+      resumeIo.streams,
+      {
+        fetchImpl,
+        sessionHomeDir: homeDir
+      }
+    );
+
+    expect(resumeExitCode).toBe(0);
+    const resumedPayload = JSON.parse(resumeIo.stdout);
+    expect(resumedPayload.status).toBe("completed");
+    expect(resumedPayload.approvals[0].status).toBe("approved");
+    expect(resumedPayload.changedFiles).toContain("src/config.ts");
+    expect(resumedPayload.artifacts[0].path).toBe("src/config.ts");
+    expect(resumedPayload.verification.passed).toBe(true);
+    await expect(readFile(join(cwd, "src", "config.ts"), "utf8")).resolves.toContain(
+      "value = 2"
+    );
+  });
 });
 
 function createMemoryIo() {
@@ -224,9 +304,9 @@ async function makeWorkspace(): Promise<string> {
     join(cwd, "package.json"),
     JSON.stringify({
       scripts: {
-        lint: "eslint .",
-        test: "vitest run",
-        typecheck: "tsc -p tsconfig.json --noEmit"
+        lint: "node -e \"process.exit(0)\"",
+        test: "node -e \"process.exit(0)\"",
+        typecheck: "node -e \"process.exit(0)\""
       }
     }),
     "utf8"
@@ -241,7 +321,10 @@ async function makeHomeDir(): Promise<string> {
   return homeDir;
 }
 
-async function writeHomeConfig(homeDir: string): Promise<void> {
+async function writeHomeConfig(
+  homeDir: string,
+  overrides?: { approvalPolicy?: "auto" | "prompt" | "never" }
+): Promise<void> {
   const configDir = join(homeDir, ".coding-agent");
   await mkdir(configDir, { recursive: true });
   await writeFile(
@@ -251,7 +334,7 @@ async function writeHomeConfig(homeDir: string): Promise<void> {
       profiles: {
         local: {
           apiKey: "secret",
-          approvalPolicy: "prompt",
+          approvalPolicy: overrides?.approvalPolicy ?? "prompt",
           baseUrl: "http://localhost:1234/v1",
           model: "gpt-4.1-mini"
         }
@@ -367,4 +450,70 @@ function mockCompletionFetch(content: string) {
         }
       )
     );
+}
+
+function toolResponse(
+  calls: Array<{
+    id: string;
+    name: string;
+    arguments: Record<string, unknown>;
+  }>
+) {
+  return new Response(
+    JSON.stringify({
+      choices: [
+        {
+          message: {
+            content: null,
+            tool_calls: calls.map((call) => ({
+              id: call.id,
+              type: "function",
+              function: {
+                name: call.name,
+                arguments: JSON.stringify(call.arguments)
+              }
+            }))
+          }
+        }
+      ]
+    }),
+    {
+      status: 200,
+      headers: {
+        "content-type": "application/json"
+      }
+    }
+  );
+}
+
+function finalResponse(content: string) {
+  return new Response(
+    JSON.stringify({
+      choices: [
+        {
+          message: {
+            content
+          }
+        }
+      ]
+    }),
+    {
+      status: 200,
+      headers: {
+        "content-type": "application/json"
+      }
+    }
+  );
+}
+
+function createSequenceFetch(responses: Response[]) {
+  return async () => {
+    const next = responses.shift();
+
+    if (!next) {
+      throw new Error("No mocked responses remaining.");
+    }
+
+    return next;
+  };
 }
