@@ -928,7 +928,6 @@ function emitToolStatus(
   input: unknown
 ): void {
   const tool = normalizeToolName(toolName);
-  const detail = summarizeToolInput(input);
   const status =
     tool === "apply_patch"
       ? "editing"
@@ -937,9 +936,17 @@ function emitToolStatus(
         : tool === "write_plan"
           ? "planning"
           : "reading";
+  const detail =
+    tool === "apply_patch"
+      ? "Applying changes."
+      : tool === "run_shell"
+        ? "Running command."
+        : tool === "write_plan"
+          ? undefined
+          : undefined;
   emitRuntimeEvent(observer, {
     at: new Date().toISOString(),
-    detail,
+    ...(detail ? { detail } : {}),
     status,
     type: "status"
   });
