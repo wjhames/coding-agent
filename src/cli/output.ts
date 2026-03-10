@@ -1,19 +1,40 @@
 import { writeFile } from "node:fs/promises";
 
+export interface PlanItem {
+  id: string;
+  content: string;
+  status: "pending" | "in_progress" | "completed";
+}
+
+export interface PlanState {
+  summary: string;
+  items: PlanItem[];
+}
+
+export interface RepoContextSummary {
+  guidanceFiles: string[];
+  isGitRepo: boolean;
+  topLevelEntries: string[];
+}
+
 export interface VerificationSummary {
   commands: string[];
+  inferred: boolean;
   passed: boolean;
 }
 
 export interface CommandResult {
-  sessionId: string | null;
-  status: "completed" | "failed" | "paused";
-  summary: string;
-  changedFiles: string[];
   artifacts: string[];
   verification: VerificationSummary;
   approvals: string[];
   exitCode: 0 | 1 | 2;
+  changedFiles: string[];
+  nextActions: string[];
+  plan: PlanState | null;
+  repoContext: RepoContextSummary;
+  sessionId: string | null;
+  status: "completed" | "failed" | "paused";
+  summary: string;
   resumedFrom?: string | null;
 }
 

@@ -25,11 +25,28 @@ describe("session store", () => {
         },
         cwd: "/workspace/project",
         mode: "exec",
+        nextActions: ["Run npm test"],
+        plan: {
+          summary: "Fix the tests",
+          items: [
+            {
+              id: "item-1",
+              content: "Inspect failing tests",
+              status: "in_progress"
+            }
+          ]
+        },
         prompt: "fix the tests",
+        repoContext: {
+          guidanceFiles: ["AGENTS.md"],
+          isGitRepo: true,
+          topLevelEntries: [".git", "AGENTS.md", "package.json"]
+        },
         status: "completed",
         summary: "Completed fix.",
         verification: {
           commands: ["npm test"],
+          inferred: true,
           passed: true
         }
       },
@@ -49,6 +66,11 @@ describe("session store", () => {
         config: {},
         cwd: "/workspace/one",
         mode: "exec",
+        repoContext: {
+          guidanceFiles: [],
+          isGitRepo: true,
+          topLevelEntries: [".git"]
+        },
         prompt: "first",
         status: "completed",
         summary: "first"
@@ -63,6 +85,11 @@ describe("session store", () => {
         config: {},
         cwd: "/workspace/two",
         mode: "exec",
+        repoContext: {
+          guidanceFiles: [],
+          isGitRepo: true,
+          topLevelEntries: [".git"]
+        },
         prompt: "second",
         status: "paused",
         summary: "second"

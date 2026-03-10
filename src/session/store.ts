@@ -2,10 +2,34 @@ import { randomUUID } from "node:crypto";
 import { readdir, readFile, writeFile } from "node:fs/promises";
 import { basename } from "node:path";
 import { z } from "zod";
+import type {
+  PlanState,
+  RepoContextSummary,
+  VerificationSummary
+} from "../cli/output.js";
 import { ensureSessionRoot, getSessionFilePath, getSessionRoot } from "./paths.js";
 
 export const sessionStatusSchema = z.enum(["completed", "failed", "paused"]);
 export const sessionModeSchema = z.enum(["interactive", "exec"]);
+const planItemSchema = z.object({
+  id: z.string(),
+  content: z.string(),
+  status: z.enum(["pending", "in_progress", "completed"])
+});
+const planStateSchema = z.object({
+  summary: z.string(),
+  items: z.array(planItemSchema)
+});
+const repoContextSchema = z.object({
+  guidanceFiles: z.array(z.string()),
+  isGitRepo: z.boolean(),
+  topLevelEntries: z.array(z.string())
+});
+const verificationSchema = z.object({
+  commands: z.array(z.string()),
+  inferred: z.boolean(),
+  passed: z.boolean()
+});
 
 export const sessionRecordSchema = z
   .object({
@@ -27,14 +51,14 @@ export const sessionRecordSchema = z
     cwd: z.string(),
     id: z.string(),
     mode: sessionModeSchema,
+    nextActions: z.array(z.string()),
+    plan: planStateSchema.nullable(),
     prompt: z.string(),
+    repoContext: repoContextSchema,
     status: sessionStatusSchema,
     summary: z.string(),
     updatedAt: z.string(),
-    verification: z.object({
-      commands: z.array(z.string()),
-      passed: z.boolean()
-    })
+    verification: verificationSchema
   })
   .strict();
 
@@ -49,10 +73,13 @@ export interface CreateSessionInput {
   config: SessionRecord["config"];
   cwd: string;
   mode: SessionMode;
+  nextActions?: string[];
+  plan?: PlanState | null;
   prompt: string;
+  repoContext: RepoContextSummary;
   status: SessionStatus;
   summary: string;
-  verification?: SessionRecord["verification"];
+  verification?: VerificationSummary;
 }
 
 export class SessionStoreError extends Error {}
@@ -71,12 +98,16 @@ export async function createSession(
     cwd: input.cwd,
     id: randomUUID(),
     mode: input.mode,
+    nextActions: input.nextActions ?? [],
+    plan: input.plan ?? null,
     prompt: input.prompt,
+    repoContext: input.repoContext,
     status: input.status,
     summary: input.summary,
     updatedAt: now,
     verification: input.verification ?? {
       commands: [],
+      inferred: false,
       passed: false
     }
   };

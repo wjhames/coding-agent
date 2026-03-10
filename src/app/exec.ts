@@ -1,6 +1,7 @@
-import { access, readdir } from "node:fs/promises";
 import { resolve } from "node:path";
-import type { CommandResult } from "../cli/output.js";
+import type { CommandResult, PlanState, RepoContextSummary } from "../cli/output.js";
+import { collectRepoContext, type RepoContext } from "./context.js";
+import { inferVerificationCommands } from "./verification.js";
 import {
   loadConfig,
   resolveExecutionConfig,
@@ -9,6 +10,7 @@ import {
 import type { ParsedOptions } from "../cli/parse.js";
 import { createOpenAICompatibleClient } from "../llm/openai.js";
 import { createSession } from "../session/store.js";
+import { createWritePlanTool } from "../tools/write-plan.js";
 
 export async function runExec(args: {
   fetchImpl: typeof fetch | undefined;
@@ -27,31 +29,54 @@ export async function runExec(args: {
     config,
     executionConfig: resolvedConfig
   });
-  const inspection = await inspectWorkspace(cwd);
+  const repoContext = await collectRepoContext(cwd);
+  const verificationCommands = inferVerificationCommands({
+    packageScripts: repoContext.packageScripts
+  });
+  let plan: PlanState | null = null;
   const client = createOpenAICompatibleClient({
     apiKey: llmConfig.apiKey,
     baseUrl: llmConfig.baseUrl,
     model: llmConfig.model,
     ...(args.fetchImpl ? { fetchImpl: args.fetchImpl } : {})
   });
-  const summary = await client.complete({
+  const toolResult = await client.runTools({
     systemPrompt: buildSystemPrompt(),
+    tools: [
+      createWritePlanTool({
+        getPlan: () => plan,
+        setPlan: (nextPlan) => {
+          plan = nextPlan;
+        }
+      })
+    ],
     userPrompt: buildUserPrompt({
       cwd,
-      inspection,
-      prompt: args.prompt
+      prompt: args.prompt,
+      repoContext,
+      verificationCommands
     })
   });
+  const nextActions = deriveNextActions(plan);
+  const repoContextSummary: RepoContextSummary = {
+    guidanceFiles: repoContext.guidanceFiles,
+    isGitRepo: repoContext.isGitRepo,
+    topLevelEntries: repoContext.topLevelEntries
+  };
   const session = await createSession(
     {
       config: resolvedConfig,
       cwd,
       mode: "exec",
+      nextActions,
+      plan,
       prompt: args.prompt,
+      repoContext: repoContextSummary,
       status: "completed",
-      summary,
+      summary: toolResult.text,
       verification: {
-        commands: [],
+        commands: verificationCommands,
+        inferred: true,
         passed: false
       }
     },
@@ -59,54 +84,45 @@ export async function runExec(args: {
   );
 
   return {
-    sessionId: session.id,
-    status: session.status,
-    summary: session.summary,
-    changedFiles: session.changedFiles,
     artifacts: session.artifacts,
     verification: session.verification,
     approvals: session.approvals,
-    exitCode: 0
-  };
-}
-
-interface WorkspaceInspection {
-  entries: string[];
-  guidanceFiles: string[];
-  isGitRepo: boolean;
-}
-
-async function inspectWorkspace(cwd: string): Promise<WorkspaceInspection> {
-  const entries = (await readdir(cwd)).sort();
-  const guidanceFiles = entries.filter((entry) =>
-    ["AGENTS.md", "CLAUDE.md", "README.md"].includes(entry)
-  );
-  const isGitRepo = await hasPath(resolve(cwd, ".git"));
-
-  return {
-    entries,
-    guidanceFiles,
-    isGitRepo
+    changedFiles: session.changedFiles,
+    exitCode: 0,
+    nextActions: session.nextActions,
+    plan: session.plan,
+    repoContext: session.repoContext,
+    sessionId: session.id,
+    status: session.status,
+    summary: session.summary
   };
 }
 
 function buildUserPrompt(args: {
   cwd: string;
-  inspection: WorkspaceInspection;
   prompt: string;
+  repoContext: RepoContext;
+  verificationCommands: string[];
 }): string {
-  const repoLine = args.inspection.isGitRepo
+  const repoLine = args.repoContext.isGitRepo
     ? "Git repository detected."
     : "No git repository detected.";
   const guidanceLine =
-    args.inspection.guidanceFiles.length > 0
-      ? `Guidance files: ${args.inspection.guidanceFiles.join(", ")}.`
+    args.repoContext.guidanceFiles.length > 0
+      ? `Guidance files: ${args.repoContext.guidanceFiles.join(", ")}.`
       : "No guidance files detected.";
-  const sampleEntries = args.inspection.entries.slice(0, 5);
   const entriesLine =
-    sampleEntries.length > 0
-      ? `Workspace entries: ${sampleEntries.join(", ")}.`
+    args.repoContext.topLevelEntries.length > 0
+      ? `Workspace entries: ${args.repoContext.topLevelEntries.join(", ")}.`
       : "Workspace is empty.";
+  const scriptsLine =
+    Object.keys(args.repoContext.packageScripts).length > 0
+      ? `Package scripts: ${Object.keys(args.repoContext.packageScripts).join(", ")}.`
+      : "No package scripts detected.";
+  const verificationLine =
+    args.verificationCommands.length > 0
+      ? `Likely verification commands: ${args.verificationCommands.join(", ")}.`
+      : "No verification commands inferred yet.";
 
   return [
     "User task:",
@@ -116,25 +132,34 @@ function buildUserPrompt(args: {
     `Working directory: ${args.cwd}`,
     repoLine,
     guidanceLine,
-    entriesLine
+    entriesLine,
+    scriptsLine,
+    verificationLine,
+    ...args.repoContext.snippets.flatMap((snippet) => [
+      "",
+      `Snippet from ${snippet.path}:`,
+      snippet.content
+    ])
   ].join("\n");
 }
 
 function buildSystemPrompt(): string {
   return [
     "You are a CLI coding agent.",
-    "You have not edited files yet.",
-    "Given the user task and workspace summary, produce a concise execution response.",
-    "Include a short plan and immediate next actions.",
+    "You have not edited files yet and must not claim to have done so.",
+    "You must call the write_plan tool before your final response.",
+    "Use the plan to capture a short concrete todo list for the task.",
+    "After calling the tool, produce a concise execution summary and immediate next actions.",
     "Do not claim tests ran or files changed when they did not."
   ].join(" ");
 }
 
-async function hasPath(path: string): Promise<boolean> {
-  try {
-    await access(path);
-    return true;
-  } catch {
-    return false;
+function deriveNextActions(plan: PlanState | null): string[] {
+  if (!plan) {
+    return [];
   }
+
+  return plan.items
+    .filter((item) => item.status !== "completed")
+    .map((item) => item.content);
 }

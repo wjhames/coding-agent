@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { z } from "zod";
 import {
   createOpenAICompatibleClient,
   LlmError
@@ -109,5 +110,112 @@ describe("createOpenAICompatibleClient", () => {
         userPrompt: "user"
       })
     ).rejects.toBeInstanceOf(LlmError);
+  });
+
+  it("runs tool calls before returning the final assistant text", async () => {
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            choices: [
+              {
+                message: {
+                  content: null,
+                  tool_calls: [
+                    {
+                      id: "call-1",
+                      type: "function",
+                      function: {
+                        name: "write_plan",
+                        arguments: JSON.stringify({
+                          summary: "Plan summary",
+                          items: [
+                            {
+                              content: "Inspect files",
+                              status: "in_progress"
+                            }
+                          ]
+                        })
+                      }
+                    }
+                  ]
+                }
+              }
+            ]
+          }),
+          {
+            status: 200,
+            headers: {
+              "content-type": "application/json"
+            }
+          }
+        )
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            choices: [
+              {
+                message: {
+                  content: "Plan is ready."
+                }
+              }
+            ]
+          }),
+          {
+            status: 200,
+            headers: {
+              "content-type": "application/json"
+            }
+          }
+        )
+      );
+
+    const client = createOpenAICompatibleClient({
+      apiKey: "secret",
+      baseUrl: "http://localhost:1234/v1",
+      fetchImpl,
+      model: "gpt-4.1-mini"
+    });
+    const run = vi.fn().mockResolvedValue("{\"ok\":true}");
+
+    await expect(
+      client.runTools({
+        systemPrompt: "system",
+        tools: [
+          {
+            description: "Write the plan.",
+            inputJsonSchema: {
+              type: "object"
+            },
+            inputSchema: z.object({
+              items: z.array(
+                z.object({
+                  content: z.string(),
+                  status: z.string()
+                })
+              ),
+              summary: z.string()
+            }),
+            name: "write_plan",
+            run
+          }
+        ],
+        userPrompt: "user"
+      })
+    ).resolves.toEqual({
+      text: "Plan is ready."
+    });
+
+    expect(run).toHaveBeenCalledWith({
+      items: [
+        {
+          content: "Inspect files",
+          status: "in_progress"
+        }
+      ],
+      summary: "Plan summary"
+    });
   });
 });

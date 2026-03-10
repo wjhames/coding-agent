@@ -14,14 +14,17 @@ export async function runResume(args: {
   }
 
   return {
-    sessionId: session.id,
-    status: session.status,
-    resumedFrom: session.id,
-    summary: session.summary,
-    changedFiles: session.changedFiles,
     artifacts: session.artifacts,
     verification: session.verification,
     approvals: session.approvals,
-    exitCode: session.status === "paused" ? 2 : session.status === "completed" ? 0 : 1
+    exitCode: session.status === "paused" ? 2 : session.status === "completed" ? 0 : 1,
+    changedFiles: session.changedFiles,
+    nextActions: session.nextActions,
+    plan: session.plan,
+    repoContext: session.repoContext,
+    resumedFrom: session.id,
+    sessionId: session.id,
+    status: session.status,
+    summary: session.summary
   };
 }

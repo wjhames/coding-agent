@@ -18,7 +18,9 @@ describe("runCli", () => {
     const homeDir = await makeHomeDir();
     await writeHomeConfig(homeDir);
     const io = createMemoryIo();
-    const fetchImpl = mockCompletionFetch("Plan:\n1. Inspect files\n2. Prepare edits");
+    const fetchImpl = mockCompletionFetch(
+      "Plan ready.\nNext actions: inspect repo guidance and verify commands."
+    );
 
     const exitCode = await runCli(
       ["exec", "inspect repo", "--json", "--cwd", cwd],
@@ -33,7 +35,36 @@ describe("runCli", () => {
     const payload = JSON.parse(io.stdout);
     expect(payload.status).toBe("completed");
     expect(payload.sessionId).toEqual(expect.any(String));
-    expect(payload.summary).toContain("Plan:");
+    expect(payload.summary).toContain("Plan ready");
+    expect(payload.plan).toEqual({
+      summary: "Investigate the repository",
+      items: [
+        {
+          id: "plan-1",
+          content: "Inspect repo guidance",
+          status: "in_progress"
+        },
+        {
+          id: "plan-2",
+          content: "Identify likely verification commands",
+          status: "pending"
+        }
+      ]
+    });
+    expect(payload.nextActions).toEqual([
+      "Inspect repo guidance",
+      "Identify likely verification commands"
+    ]);
+    expect(payload.repoContext).toEqual({
+      guidanceFiles: ["AGENTS.md", "README.md", "package.json"],
+      isGitRepo: true,
+      topLevelEntries: [".git", "AGENTS.md", "README.md", "package.json"]
+    });
+    expect(payload.verification).toEqual({
+      commands: ["npm run lint", "npm run typecheck", "npm test"],
+      inferred: true,
+      passed: false
+    });
   });
 
   it("resume loads the latest session when no id is provided", async () => {
@@ -41,7 +72,9 @@ describe("runCli", () => {
     const homeDir = await makeHomeDir();
     await writeHomeConfig(homeDir);
     const io = createMemoryIo();
-    const fetchImpl = mockCompletionFetch("Plan:\n1. Inspect files\n2. Prepare edits");
+    const fetchImpl = mockCompletionFetch(
+      "Plan ready.\nNext actions: inspect repo guidance and verify commands."
+    );
 
     await runCli(["exec", "inspect repo", "--json", "--cwd", cwd], io.streams, {
       fetchImpl,
@@ -57,6 +90,7 @@ describe("runCli", () => {
     const payload = JSON.parse(resumeIo.stdout);
     expect(payload.status).toBe("completed");
     expect(payload.resumedFrom).toEqual(payload.sessionId);
+    expect(payload.plan.summary).toBe("Investigate the repository");
   });
 
   it("exec rejects a missing prompt", async () => {
@@ -93,25 +127,7 @@ describe("runCli", () => {
     const homeDir = await makeHomeDir();
     await writeHomeConfig(homeDir);
     const io = createMemoryIo();
-    const fetchImpl = vi.fn().mockResolvedValue(
-      new Response(
-        JSON.stringify({
-          choices: [
-            {
-              message: {
-                content: "Planned next steps."
-              }
-            }
-          ]
-        }),
-        {
-          status: 200,
-          headers: {
-            "content-type": "application/json"
-          }
-        }
-      )
-    );
+    const fetchImpl = mockCompletionFetch("Plan ready.");
 
     const exitCode = await runCli(
       ["exec", "inspect repo", "--json", "--cwd", cwd],
@@ -123,7 +139,7 @@ describe("runCli", () => {
     );
 
     expect(exitCode).toBe(0);
-    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
     expect(fetchImpl).toHaveBeenCalledWith(
       "http://localhost:1234/v1/chat/completions",
       expect.objectContaining({
@@ -190,6 +206,17 @@ async function makeWorkspace(): Promise<string> {
   await mkdir(join(cwd, ".git"));
   await writeFile(join(cwd, "AGENTS.md"), "repo guidance\n", "utf8");
   await writeFile(join(cwd, "README.md"), "readme\n", "utf8");
+  await writeFile(
+    join(cwd, "package.json"),
+    JSON.stringify({
+      scripts: {
+        lint: "eslint .",
+        test: "vitest run",
+        typecheck: "tsc -p tsconfig.json --noEmit"
+      }
+    }),
+    "utf8"
+  );
 
   return cwd;
 }
@@ -221,23 +248,66 @@ async function writeHomeConfig(homeDir: string): Promise<void> {
 }
 
 function mockCompletionFetch(content: string) {
-  return vi.fn().mockResolvedValue(
-    new Response(
-      JSON.stringify({
-        choices: [
-          {
-            message: {
-              content
+  return vi
+    .fn()
+    .mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          choices: [
+            {
+              message: {
+                content: null,
+                tool_calls: [
+                  {
+                    id: "call-1",
+                    type: "function",
+                    function: {
+                      name: "write_plan",
+                      arguments: JSON.stringify({
+                        summary: "Investigate the repository",
+                        items: [
+                          {
+                            content: "Inspect repo guidance",
+                            status: "in_progress"
+                          },
+                          {
+                            content: "Identify likely verification commands",
+                            status: "pending"
+                          }
+                        ]
+                      })
+                    }
+                  }
+                ]
+              }
             }
+          ]
+        }),
+        {
+          status: 200,
+          headers: {
+            "content-type": "application/json"
           }
-        ]
-      }),
-      {
-        status: 200,
-        headers: {
-          "content-type": "application/json"
         }
-      }
+      )
     )
-  );
+    .mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          choices: [
+            {
+              message: {
+                content
+              }
+            }
+          ]
+        }),
+        {
+          status: 200,
+          headers: {
+            "content-type": "application/json"
+          }
+        }
+      )
+    );
 }
