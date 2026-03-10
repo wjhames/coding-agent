@@ -1,4 +1,4 @@
-import { readFile } from "node:fs/promises";
+import { readFile, stat } from "node:fs/promises";
 import { join } from "node:path";
 import type { GuidanceSummary } from "../cli/output.js";
 import { getAgentHome } from "../session/paths.js";
@@ -47,10 +47,7 @@ export async function loadGuidance(args: {
             });
           } catch (error) {
             if (
-              typeof error === "object" &&
-              error !== null &&
-              "code" in error &&
-              error.code === "ENOENT"
+              isIgnorableGuidanceReadError(error)
             ) {
               return null;
             }
@@ -88,12 +85,7 @@ async function loadHomeGuidance(homeDir?: string): Promise<GuidanceLayer | null>
       source: "home"
     });
   } catch (error) {
-    if (
-      typeof error === "object" &&
-      error !== null &&
-      "code" in error &&
-      error.code === "ENOENT"
-    ) {
+    if (isIgnorableGuidanceReadError(error)) {
       return null;
     }
 
@@ -102,6 +94,12 @@ async function loadHomeGuidance(homeDir?: string): Promise<GuidanceLayer | null>
 }
 
 async function readGuidanceFile(path: string): Promise<string> {
+  const fileStat = await stat(path);
+
+  if (!fileStat.isFile()) {
+    throw new Error(`Guidance path is not a file: \`${path}\`.`);
+  }
+
   const content = await readFile(path, "utf8");
   return content.slice(0, MAX_GUIDANCE_BYTES);
 }
@@ -160,4 +158,17 @@ function collectActiveRules(layers: GuidanceLayer[]): string[] {
   }
 
   return activeRules;
+}
+
+function isIgnorableGuidanceReadError(error: unknown): boolean {
+  if (
+    typeof error === "object" &&
+    error !== null &&
+    "code" in error &&
+    (error.code === "ENOENT" || error.code === "EISDIR")
+  ) {
+    return true;
+  }
+
+  return error instanceof Error && error.message.startsWith("Guidance path is not a file:");
 }

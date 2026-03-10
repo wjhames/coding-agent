@@ -1,4 +1,4 @@
-import { readdir, readFile } from "node:fs/promises";
+import { readdir, readFile, stat } from "node:fs/promises";
 import { relative, resolve, sep } from "node:path";
 
 const SKIPPED_DIRS = new Set([".git", "node_modules", "dist", "coverage"]);
@@ -37,6 +37,12 @@ export async function readWorkspaceTextFile(args: {
   path: string;
 }): Promise<string> {
   const resolvedPath = resolveWorkspacePath(args.cwd, args.path);
+  const fileStat = await stat(resolvedPath);
+
+  if (!fileStat.isFile()) {
+    throw new Error(`Requested path is not a file: \`${args.path}\`.`);
+  }
+
   const contents = await readFile(resolvedPath, "utf8");
   return contents.slice(0, args.maxBytes);
 }

@@ -85,4 +85,27 @@ describe("loadGuidance", () => {
       }
     ]);
   });
+
+  it("ignores repo guidance paths that are directories", async () => {
+    const cwd = await mkdtemp(join(os.tmpdir(), "coding-agent-guidance-workspace-"));
+    const homeDir = await mkdtemp(join(os.tmpdir(), "coding-agent-guidance-home-"));
+    tempDirs.push(cwd, homeDir);
+    await mkdir(join(cwd, "README.md"));
+
+    const guidance = await loadGuidance({
+      cwd,
+      homeDir,
+      prompt: "inspect repo",
+      repoGuidanceFiles: ["README.md"]
+    });
+
+    expect(guidance.summary.activeRules).toEqual(["inspect repo"]);
+    expect(guidance.summary.sources).toEqual([
+      {
+        path: "task",
+        priority: 300,
+        source: "task"
+      }
+    ]);
+  });
 });

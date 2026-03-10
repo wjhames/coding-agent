@@ -65,6 +65,20 @@ describe("read-only tools", () => {
     ).resolves.toContain("src/config.ts:1:");
     expect(observations).toHaveLength(1);
   });
+
+  it("returns a normal error when asked to read a directory", async () => {
+    const cwd = await makeWorkspace();
+    const tool = createReadFileTool({
+      cwd,
+      observe: () => {}
+    });
+
+    await expect(
+      tool.run({
+        path: "src"
+      })
+    ).rejects.toThrow("Requested path is not a file: `src`.");
+  });
 });
 
 async function makeWorkspace(): Promise<string> {

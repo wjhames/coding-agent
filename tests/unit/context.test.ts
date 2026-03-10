@@ -44,4 +44,17 @@ describe("collectRepoContext", () => {
       "package.json"
     ]);
   });
+
+  it("ignores guidance entries that are directories", async () => {
+    const cwd = await mkdtemp(join(os.tmpdir(), "coding-agent-context-"));
+    tempDirs.push(cwd);
+
+    await mkdir(join(cwd, ".git"));
+    await mkdir(join(cwd, "README.md"));
+
+    const context = await collectRepoContext(cwd);
+
+    expect(context.guidanceFiles).toEqual([]);
+    expect(context.snippets).toEqual([]);
+  });
 });

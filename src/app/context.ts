@@ -1,4 +1,4 @@
-import { access, readFile, readdir } from "node:fs/promises";
+import { access, readFile, readdir, stat } from "node:fs/promises";
 import { join } from "node:path";
 import type { RepoContextSummary } from "../cli/output.js";
 
@@ -17,7 +17,13 @@ const MAX_TOP_LEVEL_ENTRIES = 12;
 export async function collectRepoContext(cwd: string): Promise<RepoContext> {
   const entries = (await readdir(cwd)).sort();
   const topLevelEntries = entries.slice(0, MAX_TOP_LEVEL_ENTRIES);
-  const guidanceFiles = GUIDANCE_FILES.filter((name) => entries.includes(name));
+  const guidanceFiles = (
+    await Promise.all(
+      GUIDANCE_FILES.filter((name) => entries.includes(name)).map(async (name) =>
+        (await isRegularFile(join(cwd, name))) ? name : null
+      )
+    )
+  ).filter((name): name is (typeof GUIDANCE_FILES)[number] => name !== null);
   const snippets = await Promise.all(
     guidanceFiles.map(async (path) => ({
       content: await readSnippet(join(cwd, path)),
@@ -59,6 +65,14 @@ async function hasPath(path: string): Promise<boolean> {
   try {
     await access(path);
     return true;
+  } catch {
+    return false;
+  }
+}
+
+async function isRegularFile(path: string): Promise<boolean> {
+  try {
+    return (await stat(path)).isFile();
   } catch {
     return false;
   }
