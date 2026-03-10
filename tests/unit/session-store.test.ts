@@ -56,7 +56,9 @@ describe("session store", () => {
         verification: {
           commands: ["npm test"],
           inferred: true,
+          notRunReason: null,
           passed: true,
+          ran: true,
           runs: [
             {
               command: "npm test",
@@ -65,7 +67,8 @@ describe("session store", () => {
               stderr: "",
               stdout: "ok"
             }
-          ]
+          ],
+          status: "passed"
         }
       },
       homeDir
@@ -98,8 +101,11 @@ describe("session store", () => {
         verification: {
           commands: [],
           inferred: true,
-          passed: true,
-          runs: []
+          notRunReason: "No file changes were made.",
+          passed: false,
+          ran: false,
+          runs: [],
+          status: "not_run"
         }
       },
       homeDir
@@ -124,8 +130,11 @@ describe("session store", () => {
         verification: {
           commands: [],
           inferred: true,
-          passed: true,
-          runs: []
+          notRunReason: "No file changes were made.",
+          passed: false,
+          ran: false,
+          runs: [],
+          status: "not_run"
         }
       },
       homeDir
@@ -161,8 +170,11 @@ describe("session store", () => {
         verification: {
           commands: [],
           inferred: true,
-          passed: true,
-          runs: []
+          notRunReason: "No file changes were made.",
+          passed: false,
+          ran: false,
+          runs: [],
+          status: "not_run"
         }
       },
       homeDir
@@ -203,8 +215,11 @@ describe("session store", () => {
         verification: {
           commands: ["npm test"],
           inferred: true,
-          passed: true,
-          runs: []
+          notRunReason: "No file changes were made.",
+          passed: false,
+          ran: false,
+          runs: [],
+          status: "not_run"
         }
       },
       homeDir

@@ -117,8 +117,11 @@ describe("runCli", () => {
     expect(payload.verification).toEqual({
       commands: ["npm run lint", "npm run typecheck", "npm test"],
       inferred: true,
-      passed: true,
-      runs: []
+      notRunReason: "No file changes were made.",
+      passed: false,
+      ran: false,
+      runs: [],
+      status: "not_run"
     });
   });
 
@@ -321,6 +324,13 @@ describe("runCli", () => {
     expect(pausedPayload.status).toBe("paused");
     expect(pausedPayload.approvals).toHaveLength(1);
     expect(pausedPayload.approvals[0].status).toBe("pending");
+    expect(pausedPayload.pendingApproval).toEqual({
+      operationCount: 1,
+      reason: "file_write",
+      summary: "Approval required to apply 1 patch operation(s).",
+      tool: "apply_patch"
+    });
+    expect(pausedPayload.resumeCommand).toContain("coding-agent resume");
 
     const resumeIo = createMemoryIo();
     const resumeExitCode = await runCli(
@@ -339,6 +349,8 @@ describe("runCli", () => {
     expect(resumedPayload.changedFiles).toContain("src/config.ts");
     expect(resumedPayload.artifacts[0].path).toBe("src/config.ts");
     expect(resumedPayload.verification.passed).toBe(true);
+    expect(resumedPayload.verification.ran).toBe(true);
+    expect(resumedPayload.verification.status).toBe("passed");
     await expect(readFile(join(cwd, "src", "config.ts"), "utf8")).resolves.toContain(
       "value = 2"
     );

@@ -5,6 +5,18 @@ export async function runVerificationCommands(args: {
   commands: string[];
   cwd: string;
 }): Promise<VerificationSummary> {
+  if (args.commands.length === 0) {
+    return {
+      commands: [],
+      inferred: true,
+      notRunReason: "No verification commands were inferred.",
+      passed: false,
+      ran: false,
+      runs: [],
+      status: "not_run"
+    };
+  }
+
   const runs = [];
 
   for (const command of args.commands) {
@@ -22,8 +34,11 @@ export async function runVerificationCommands(args: {
       return {
         commands: args.commands,
         inferred: true,
+        notRunReason: null,
         passed: false,
-        runs
+        ran: true,
+        runs,
+        status: "failed"
       };
     }
   }
@@ -31,7 +46,10 @@ export async function runVerificationCommands(args: {
   return {
     commands: args.commands,
     inferred: true,
+    notRunReason: null,
     passed: runs.every((run) => run.passed),
-    runs
+    ran: true,
+    runs,
+    status: runs.every((run) => run.passed) ? "passed" : "failed"
   };
 }

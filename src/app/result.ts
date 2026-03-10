@@ -2,6 +2,22 @@ import type { CommandResult } from "../cli/output.js";
 import type { SessionRecord } from "../session/store.js";
 
 export function resultFromSession(session: SessionRecord): CommandResult {
+  const pendingApproval =
+    session.pendingAction === null
+      ? null
+      : {
+          ...(session.pendingAction.tool === "run_shell"
+            ? { command: session.pendingAction.action.command }
+            : { operationCount: session.pendingAction.action.operations.length }),
+          reason: session.pendingAction.approval.reason,
+          summary: session.pendingAction.approval.summary,
+          tool: session.pendingAction.tool
+        };
+  const resumeCommand =
+    session.status === "paused"
+      ? `coding-agent resume ${session.id} --approval-policy auto`
+      : null;
+
   return {
     approvals: session.approvals,
     artifacts: session.artifacts,
@@ -14,8 +30,10 @@ export function resultFromSession(session: SessionRecord): CommandResult {
     memory: session.memory,
     nextActions: session.nextActions,
     observations: session.observations,
+    pendingApproval,
     plan: session.plan,
     repoContext: session.repoContext,
+    resumeCommand,
     sessionId: session.id,
     status: session.status,
     summary: session.summary,

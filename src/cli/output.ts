@@ -40,6 +40,14 @@ export interface Approval {
   tool: "apply_patch" | "run_shell";
 }
 
+export interface PendingApprovalInfo {
+  command?: string | undefined;
+  operationCount?: number | undefined;
+  reason: string;
+  summary: string;
+  tool: "apply_patch" | "run_shell";
+}
+
 export interface VerificationRun {
   command: string;
   exitCode: number;
@@ -51,8 +59,11 @@ export interface VerificationRun {
 export interface VerificationSummary {
   commands: string[];
   inferred: boolean;
+  notRunReason: string | null;
   passed: boolean;
+  ran: boolean;
   runs: VerificationRun[];
+  status: "failed" | "not_run" | "passed";
 }
 
 export interface GuidanceSource {
@@ -100,8 +111,10 @@ export interface CommandResult {
   exitCode: 0 | 1 | 2;
   nextActions: string[];
   observations: Observation[];
+  pendingApproval: PendingApprovalInfo | null;
   plan: PlanState | null;
   repoContext: RepoContextSummary;
+  resumeCommand: string | null;
   sessionId: string | null;
   status: "completed" | "failed" | "paused";
   summary: string;

@@ -98,12 +98,24 @@ const verificationRunSchema = z.object({
   stderr: z.string(),
   stdout: z.string()
 });
-const verificationSchema = z.object({
-  commands: z.array(z.string()),
-  inferred: z.boolean(),
-  passed: z.boolean(),
-  runs: z.array(verificationRunSchema)
-});
+const verificationSchema = z
+  .object({
+    commands: z.array(z.string()),
+    inferred: z.boolean(),
+    notRunReason: z.string().nullable().optional(),
+    passed: z.boolean(),
+    ran: z.boolean().optional(),
+    runs: z.array(verificationRunSchema),
+    status: z.enum(["failed", "not_run", "passed"]).optional()
+  })
+  .transform((value) => ({
+    ...value,
+    notRunReason: value.notRunReason ?? null,
+    ran: value.ran ?? value.runs.length > 0,
+    status:
+      value.status ??
+      (value.runs.length === 0 ? "not_run" : value.passed ? "passed" : "failed")
+  }));
 const guidanceSummarySchema = z.object({
   activeRules: z.array(z.string()),
   sources: z.array(
@@ -496,8 +508,11 @@ export function reduceSessionEvents(events: SessionEvent[]): SessionRecord | nul
     verification: {
       commands: [],
       inferred: false,
+      notRunReason: null,
       passed: false,
-      runs: []
+      ran: false,
+      runs: [],
+      status: "not_run"
     }
   };
 

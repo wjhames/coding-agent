@@ -92,20 +92,32 @@ const pendingShellSchema = z.object({
   }),
   tool: z.literal("run_shell")
 });
-const verificationSchema = z.object({
-  commands: z.array(z.string()),
-  inferred: z.boolean(),
-  passed: z.boolean(),
-  runs: z.array(
-    z.object({
-      command: z.string(),
-      exitCode: z.number().int(),
-      passed: z.boolean(),
-      stderr: z.string(),
-      stdout: z.string()
-    })
-  )
-});
+const verificationSchema = z
+  .object({
+    commands: z.array(z.string()),
+    inferred: z.boolean(),
+    notRunReason: z.string().nullable().optional(),
+    passed: z.boolean(),
+    ran: z.boolean().optional(),
+    runs: z.array(
+      z.object({
+        command: z.string(),
+        exitCode: z.number().int(),
+        passed: z.boolean(),
+        stderr: z.string(),
+        stdout: z.string()
+      })
+    ),
+    status: z.enum(["failed", "not_run", "passed"]).optional()
+  })
+  .transform((value) => ({
+    ...value,
+    notRunReason: value.notRunReason ?? null,
+    ran: value.ran ?? value.runs.length > 0,
+    status:
+      value.status ??
+      (value.runs.length === 0 ? "not_run" : value.passed ? "passed" : "failed")
+  }));
 const guidanceSourceSchema = z.object({
   path: z.string(),
   priority: z.number().int(),
@@ -246,8 +258,11 @@ export async function createSession(
     verification: input.verification ?? {
       commands: [],
       inferred: false,
+      notRunReason: null,
       passed: false,
-      runs: []
+      ran: false,
+      runs: [],
+      status: "not_run"
     }
   };
 
