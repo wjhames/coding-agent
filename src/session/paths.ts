@@ -3,6 +3,12 @@ import os from "node:os";
 import { join } from "node:path";
 
 export function getAgentHome(homeDir = os.homedir()): string {
+  const overriddenHome = process.env.CODING_AGENT_HOME;
+
+  if (overriddenHome) {
+    return overriddenHome;
+  }
+
   return join(homeDir, ".coding-agent");
 }
 

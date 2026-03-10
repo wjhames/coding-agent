@@ -25,8 +25,8 @@ export interface CommandError {
 }
 
 export interface CliIO {
-  stdout: NodeJS.WriteStream;
-  stderr: NodeJS.WriteStream;
+  stdout: Pick<NodeJS.WritableStream, "write">;
+  stderr: Pick<NodeJS.WritableStream, "write">;
 }
 
 export async function writeCommandResult(

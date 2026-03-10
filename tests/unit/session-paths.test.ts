@@ -12,9 +12,12 @@ import {
 const tempDirs: string[] = [];
 
 describe("session paths", () => {
+  const originalAgentHome = process.env.CODING_AGENT_HOME;
+
   afterEach(async () => {
     await Promise.all(tempDirs.map((dir) => rm(dir, { force: true, recursive: true })));
     tempDirs.length = 0;
+    restoreAgentHome(originalAgentHome);
   });
 
   it("builds the default storage paths from the home directory", () => {
@@ -35,4 +38,20 @@ describe("session paths", () => {
     expect(stats.isDirectory()).toBe(true);
     expect(sessionRoot).toBe(join(homeDir, ".coding-agent", "sessions"));
   });
+
+  it("prefers CODING_AGENT_HOME when provided", () => {
+    process.env.CODING_AGENT_HOME = "/tmp/custom-agent-home";
+
+    expect(getAgentHome("/tmp/ignored-home")).toBe("/tmp/custom-agent-home");
+    expect(getSessionRoot("/tmp/ignored-home")).toBe("/tmp/custom-agent-home/sessions");
+  });
 });
+
+function restoreAgentHome(value: string | undefined) {
+  if (value === undefined) {
+    delete process.env.CODING_AGENT_HOME;
+    return;
+  }
+
+  process.env.CODING_AGENT_HOME = value;
+}
