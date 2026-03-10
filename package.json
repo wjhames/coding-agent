@@ -16,6 +16,7 @@
     "build": "tsc -p tsconfig.json",
     "dev": "tsx src/cli/main.ts",
     "smoke:inspect": "npm run build && node scripts/smoke-noninteractive.mjs inspect",
+    "smoke:pause-resume": "npm run build && node scripts/smoke-noninteractive.mjs pause-resume",
     "smoke:write": "npm run build && node scripts/smoke-noninteractive.mjs write",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run"

@@ -11,7 +11,7 @@ const repoRoot = resolve(__dirname, "..");
 const distCli = join(repoRoot, "dist", "cli", "main.js");
 const scenario = process.argv[2] ?? "inspect";
 
-if (!["inspect", "write"].includes(scenario)) {
+if (!["inspect", "pause-resume", "inspect", "write"].includes(scenario)) {
   console.error(`Unknown scenario: ${scenario}`);
   process.exit(1);
 }
@@ -24,7 +24,7 @@ await copyFile(join(os.homedir(), ".coding-agent", "config.json"), join(agentHom
 let workspace = repoRoot;
 
 try {
-  if (scenario === "write") {
+  if (scenario === "write" || scenario === "pause-resume") {
     workspace = await makeWriteWorkspace();
   }
 
@@ -33,27 +33,16 @@ try {
       ? "Inspect this repository and summarize the current implementation status without making changes. Prefer file tools over shell for inspection."
       : "Use only files in the current workspace. Change the greeting in greeting.js from hello to hi, keep it runnable, and rely on inferred verification commands.";
 
-  const args = [
-    distCli,
-    "exec",
-    prompt,
-    "--json",
-    "--cwd",
-    workspace,
-    "--max-steps",
-    scenario === "inspect" ? "8" : "16",
-    "--approval-policy",
-    scenario === "inspect" ? "never" : "auto"
-  ];
-  const result = await runNode(args, {
-    CODING_AGENT_HOME: agentHome
-  });
-
-  if (result.exitCode !== 0) {
-    throw new Error(`Smoke scenario ${scenario} failed with exit code ${result.exitCode}.\n${result.stderr || result.stdout}`);
-  }
-
-  const payload = JSON.parse(result.stdout);
+  const payload =
+    scenario === "pause-resume"
+      ? await runPauseResumeScenario({ agentHome, prompt, workspace })
+      : await runExecScenario({
+          agentHome,
+          approvalPolicy: scenario === "inspect" ? "never" : "auto",
+          maxSteps: scenario === "inspect" ? "8" : "16",
+          prompt,
+          workspace
+        });
   await validateScenario(scenario, workspace, payload);
   console.log(JSON.stringify({
     scenario,
@@ -65,7 +54,7 @@ try {
 } finally {
   await rm(tempHome, { force: true, recursive: true });
 
-  if (scenario === "write" && workspace !== repoRoot) {
+  if ((scenario === "write" || scenario === "pause-resume") && workspace !== repoRoot) {
     await rm(workspace, { force: true, recursive: true });
   }
 }
@@ -116,6 +105,81 @@ async function validateScenario(scenario, workspace, payload) {
   if (!contents.includes("\"hi\"")) {
     throw new Error("Write smoke did not update greeting.js to hi.");
   }
+}
+
+async function runExecScenario(args) {
+  const result = await runNode(
+    [
+      distCli,
+      "exec",
+      args.prompt,
+      "--json",
+      "--cwd",
+      args.workspace,
+      "--max-steps",
+      args.maxSteps,
+      "--approval-policy",
+      args.approvalPolicy
+    ],
+    {
+      CODING_AGENT_HOME: args.agentHome
+    }
+  );
+
+  if (result.exitCode !== 0) {
+    throw new Error(`Smoke scenario failed with exit code ${result.exitCode}.\n${result.stderr || result.stdout}`);
+  }
+
+  return JSON.parse(result.stdout);
+}
+
+async function runPauseResumeScenario(args) {
+  const paused = await runNode(
+    [
+      distCli,
+      "exec",
+      args.prompt,
+      "--json",
+      "--cwd",
+      args.workspace,
+      "--max-steps",
+      "16",
+      "--approval-policy",
+      "prompt"
+    ],
+    {
+      CODING_AGENT_HOME: args.agentHome
+    }
+  );
+
+  if (paused.exitCode !== 2) {
+    throw new Error(`Pause-resume smoke expected paused exit code 2, received ${paused.exitCode}.`);
+  }
+
+  const pausedPayload = JSON.parse(paused.stdout);
+  if (pausedPayload.status !== "paused" || !pausedPayload.sessionId) {
+    throw new Error("Pause-resume smoke did not produce a paused session.");
+  }
+
+  const resumed = await runNode(
+    [
+      distCli,
+      "resume",
+      pausedPayload.sessionId,
+      "--json",
+      "--approval-policy",
+      "auto"
+    ],
+    {
+      CODING_AGENT_HOME: args.agentHome
+    }
+  );
+
+  if (resumed.exitCode !== 0) {
+    throw new Error(`Pause-resume smoke resume failed with exit code ${resumed.exitCode}.\n${resumed.stderr || resumed.stdout}`);
+  }
+
+  return JSON.parse(resumed.stdout);
 }
 
 function runNode(args, env) {
