@@ -29,23 +29,38 @@ export async function loadGuidance(args: {
   cwd: string;
   homeDir?: string | undefined;
   prompt: string;
-  repoEntries: string[];
+  repoGuidanceFiles: string[];
 }): Promise<LoadedGuidance> {
   const taskLayer = createTaskGuidance(args.prompt);
   const homeLayer = await loadHomeGuidance(args.homeDir);
-  const repoLayers = await Promise.all(
-    REPO_GUIDANCE_FILES.filter((file) => args.repoEntries.includes(file.name)).map(
-      async ({ name, priority }) => {
-        const content = await readGuidanceFile(join(args.cwd, name));
-        return createGuidanceLayer({
-          content,
-          path: name,
-          priority,
-          source: "repo"
-        });
-      }
+  const repoLayers = (
+    await Promise.all(
+      REPO_GUIDANCE_FILES.filter((file) => args.repoGuidanceFiles.includes(file.name)).map(
+        async ({ name, priority }) => {
+          try {
+            const content = await readGuidanceFile(join(args.cwd, name));
+            return createGuidanceLayer({
+              content,
+              path: name,
+              priority,
+              source: "repo"
+            });
+          } catch (error) {
+            if (
+              typeof error === "object" &&
+              error !== null &&
+              "code" in error &&
+              error.code === "ENOENT"
+            ) {
+              return null;
+            }
+
+            throw error;
+          }
+        }
+      )
     )
-  );
+  ).filter((layer): layer is GuidanceLayer => layer !== null);
   const layers = [taskLayer, ...(homeLayer ? [homeLayer] : []), ...repoLayers].filter(
     (layer) => layer.rules.length > 0
   );

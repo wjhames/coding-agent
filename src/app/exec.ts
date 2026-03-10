@@ -211,7 +211,7 @@ async function executeTask(args: {
     cwd: args.cwd,
     homeDir: args.sessionHomeDir,
     prompt: args.prompt,
-    repoEntries: repoContext.topLevelEntries
+    repoGuidanceFiles: repoContext.guidanceFiles
   });
   const verificationCommands = inferVerificationCommands({
     packageScripts: repoContext.packageScripts

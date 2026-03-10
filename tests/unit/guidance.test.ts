@@ -30,7 +30,7 @@ describe("loadGuidance", () => {
       cwd,
       homeDir,
       prompt: "fix the failing test",
-      repoEntries: ["AGENTS.md", "README.md"]
+      repoGuidanceFiles: ["AGENTS.md", "README.md"]
     });
 
     expect(guidance.summary.activeRules).toEqual([
@@ -60,6 +60,28 @@ describe("loadGuidance", () => {
         path: "README.md",
         priority: 120,
         source: "repo"
+      }
+    ]);
+  });
+
+  it("ignores repo guidance files that disappear before reading", async () => {
+    const cwd = await mkdtemp(join(os.tmpdir(), "coding-agent-guidance-workspace-"));
+    const homeDir = await mkdtemp(join(os.tmpdir(), "coding-agent-guidance-home-"));
+    tempDirs.push(cwd, homeDir);
+
+    const guidance = await loadGuidance({
+      cwd,
+      homeDir,
+      prompt: "inspect repo",
+      repoGuidanceFiles: ["README.md"]
+    });
+
+    expect(guidance.summary.activeRules).toEqual(["inspect repo"]);
+    expect(guidance.summary.sources).toEqual([
+      {
+        path: "task",
+        priority: 300,
+        source: "task"
       }
     ]);
   });
