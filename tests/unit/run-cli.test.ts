@@ -121,6 +121,13 @@ describe("runCli", () => {
       passed: false,
       ran: false,
       runs: [],
+      selectedCommands: ["npm run lint", "npm run typecheck", "npm test"],
+      skippedCommands: [
+        {
+          command: "npm run check",
+          reason: "Script `check` is not defined."
+        }
+      ],
       status: "not_run"
     });
   });
@@ -325,6 +332,7 @@ describe("runCli", () => {
     expect(pausedPayload.approvals).toHaveLength(1);
     expect(pausedPayload.approvals[0].status).toBe("pending");
     expect(pausedPayload.pendingApproval).toEqual({
+      actionClass: "patch_write",
       operationCount: 1,
       reason: "file_write",
       summary: "Approval required to apply 1 patch operation(s).",
@@ -350,10 +358,54 @@ describe("runCli", () => {
     expect(resumedPayload.artifacts[0].path).toBe("src/config.ts");
     expect(resumedPayload.verification.passed).toBe(true);
     expect(resumedPayload.verification.ran).toBe(true);
+    expect(resumedPayload.verification.selectedCommands).toEqual(["npm run lint", "npm run typecheck", "npm test"]);
     expect(resumedPayload.verification.status).toBe("passed");
     await expect(readFile(join(cwd, "src", "config.ts"), "utf8")).resolves.toContain(
       "value = 2"
     );
+  });
+
+  it("renders doctor output in json mode", async () => {
+    const homeDir = await makeHomeDir();
+    await writeHomeConfig(homeDir);
+    const io = createMemoryIo();
+
+    const exitCode = await runCli(["doctor", "--json"], io.streams, {
+      sessionHomeDir: homeDir
+    });
+
+    expect(exitCode).toBe(0);
+    expect(JSON.parse(io.stdout)).toEqual({
+      configPresent: true,
+      defaultProfile: "local",
+      llmReady: true,
+      model: "gpt-4.1-mini",
+      profiles: ["local"],
+      sessionHome: homeDir
+    });
+  });
+
+  it("lists recent sessions", async () => {
+    const cwd = await makeWorkspace();
+    const homeDir = await makeHomeDir();
+    await writeHomeConfig(homeDir);
+    const io = createMemoryIo();
+    const fetchImpl = mockCompletionFetch("Plan ready.");
+
+    await runCli(["exec", "inspect repo", "--json", "--cwd", cwd], io.streams, {
+      fetchImpl,
+      sessionHomeDir: homeDir
+    });
+
+    const sessionsIo = createMemoryIo();
+    const exitCode = await runCli(["sessions", "--json"], sessionsIo.streams, {
+      sessionHomeDir: homeDir
+    });
+
+    expect(exitCode).toBe(0);
+    const payload = JSON.parse(sessionsIo.stdout);
+    expect(payload).toHaveLength(1);
+    expect(payload[0].status).toBe("completed");
   });
 });
 

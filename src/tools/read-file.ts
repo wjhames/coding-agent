@@ -62,7 +62,14 @@ export function createReadFileTool(args: {
         tool: "read_file"
       });
 
-      return excerpt.length > 0 ? excerpt : "No content found.";
+      return JSON.stringify({
+        endLine: startIndex + selectedLines.length,
+        excerpt,
+        ok: true,
+        path: normalizedPath,
+        startLine: startIndex + 1,
+        truncated: contents.length >= 32_000
+      });
     }
   };
 }

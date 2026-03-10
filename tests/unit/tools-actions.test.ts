@@ -56,7 +56,7 @@ describe("action tools", () => {
           }
         ]
       })
-    ).resolves.toContain("Applied patch");
+    ).resolves.toContain("\"operationCount\":1");
 
     await expect(readFile(join(cwd, "src", "config.ts"), "utf8")).resolves.toContain(
       "value = 2"

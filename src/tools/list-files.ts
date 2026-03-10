@@ -48,7 +48,11 @@ export function createListFilesTool(args: {
         tool: "list_files"
       });
 
-      return excerpt.length > 0 ? excerpt : "No files found.";
+      return JSON.stringify({
+        entries: files,
+        ok: true,
+        path: parsed.path ?? "."
+      });
     }
   };
 }

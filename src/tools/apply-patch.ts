@@ -1,7 +1,7 @@
 import { mkdir, rm, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import { z } from "zod";
-import { enforceApproval } from "../app/approval.js";
+import { classifyPatchAction, enforceApproval } from "../app/approval.js";
 import { createDiffArtifact, readMaybeFile } from "../app/diff.js";
 import type { Approval, Artifact, Observation } from "../cli/output.js";
 import type { ResolvedExecutionConfig } from "../config/load.js";
@@ -95,6 +95,7 @@ export function createApplyPatchTool(args: {
       const parsed = applyPatchInputSchema.parse(input);
       const approval = enforceApproval({
         action: parsed,
+        actionClass: classifyPatchAction(parsed.operations),
         config: args.config,
         reason: "file_write",
         requiresApproval: args.config.approvalPolicy !== "auto",
@@ -141,7 +142,12 @@ export async function applyPatchOperations(args: {
     tool: "apply_patch"
   });
 
-  return `Applied patch to ${changedFiles.size} file(s).`;
+  return JSON.stringify({
+    artifacts,
+    changedFiles: [...changedFiles].sort(),
+    ok: true,
+    operationCount: args.operations.length
+  });
 }
 
 async function applyOperation(cwd: string, operation: PatchOperation): Promise<Artifact> {

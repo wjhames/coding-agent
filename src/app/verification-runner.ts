@@ -4,6 +4,10 @@ import type { VerificationSummary } from "../cli/output.js";
 export async function runVerificationCommands(args: {
   commands: string[];
   cwd: string;
+  skippedCommands?: Array<{
+    command: string;
+    reason: string;
+  }>;
 }): Promise<VerificationSummary> {
   if (args.commands.length === 0) {
     return {
@@ -13,6 +17,8 @@ export async function runVerificationCommands(args: {
       passed: false,
       ran: false,
       runs: [],
+      selectedCommands: [],
+      skippedCommands: args.skippedCommands ?? [],
       status: "not_run"
     };
   }
@@ -38,6 +44,8 @@ export async function runVerificationCommands(args: {
         passed: false,
         ran: true,
         runs,
+        selectedCommands: args.commands,
+        skippedCommands: args.skippedCommands ?? [],
         status: "failed"
       };
     }
@@ -50,6 +58,8 @@ export async function runVerificationCommands(args: {
     passed: runs.every((run) => run.passed),
     ran: true,
     runs,
+    selectedCommands: args.commands,
+    skippedCommands: args.skippedCommands ?? [],
     status: runs.every((run) => run.passed) ? "passed" : "failed"
   };
 }

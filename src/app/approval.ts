@@ -1,6 +1,8 @@
 import { randomUUID } from "node:crypto";
-import type { Approval } from "../cli/output.js";
+import type { Approval, PatchOperation, PendingAction } from "../runtime/contracts.js";
 import type { ResolvedExecutionConfig } from "../config/load.js";
+
+export type { PendingAction } from "../runtime/contracts.js";
 
 export class ApprovalRequiredError extends Error {
   constructor(
@@ -17,40 +19,8 @@ export class ApprovalDeniedError extends Error {
   }
 }
 
-export type PendingAction =
-  | {
-      approval: Approval;
-      action: {
-        operations: Array<
-          | {
-              newText: string;
-              oldText: string;
-              path: string;
-              type: "replace";
-            }
-          | {
-              content: string;
-              path: string;
-              type: "create";
-            }
-          | {
-              path: string;
-              type: "delete";
-            }
-        >;
-      };
-      tool: "apply_patch";
-    }
-  | {
-      approval: Approval;
-      action: {
-        command: string;
-        justification?: string | undefined;
-      };
-      tool: "run_shell";
-    };
-
 export function enforceApproval(args: {
+  actionClass: Approval["actionClass"];
   command?: string;
   config: ResolvedExecutionConfig;
   reason: string;
@@ -64,6 +34,7 @@ export function enforceApproval(args: {
   }
 
   const approval = createApproval({
+    actionClass: args.actionClass,
     command: args.command,
     reason: args.reason,
     summary: args.summary,
@@ -90,12 +61,14 @@ export function enforceApproval(args: {
 }
 
 export function createApproval(args: {
+  actionClass: Approval["actionClass"];
   command?: string | undefined;
   reason: string;
   summary: string;
   tool: "apply_patch" | "run_shell";
 }): Approval {
   return {
+    actionClass: args.actionClass,
     command: args.command,
     id: randomUUID(),
     reason: args.reason,
@@ -103,6 +76,24 @@ export function createApproval(args: {
     summary: args.summary,
     tool: args.tool
   };
+}
+
+export function classifyPatchAction(
+  operations: PatchOperation[]
+): Approval["actionClass"] {
+  return operations.length > 0 ? "patch_write" : "read_only_tool";
+}
+
+export function classifyShellCommand(command: string): Approval["actionClass"] {
+  if (isShellCommandDangerous(command)) {
+    return "shell_dangerous";
+  }
+
+  if (isShellCommandNetworked(command)) {
+    return "shell_networked";
+  }
+
+  return isShellCommandReadOnly(command) ? "shell_read_only" : "shell_side_effect";
 }
 
 export function isShellCommandDangerous(command: string): boolean {
@@ -125,4 +116,43 @@ export function isShellCommandNetworked(command: string): boolean {
   return ["curl ", "wget ", "npm install", "pnpm add", "yarn add", "pip install"].some(
     (token) => lowered.includes(token)
   );
+}
+
+export function isShellCommandReadOnly(command: string): boolean {
+  const lowered = normalizeShellCommand(command);
+  return [
+    /^git status(?:\s|$)/,
+    /^git diff(?:\s|$)/,
+    /^pwd(?:\s|$)/,
+    /^ls(?:\s|$)/,
+    /^find(?:\s|$)/,
+    /^rg(?:\s|$)/,
+    /^cat(?:\s|$)/,
+    /^sed\s+-n(?:\s|$)/,
+    /^head(?:\s|$)/,
+    /^tail(?:\s|$)/,
+    /^wc(?:\s|$)/,
+    /^stat(?:\s|$)/
+  ].some((pattern) => pattern.test(lowered));
+}
+
+export function normalizeShellCommand(command: string): string {
+  let normalized = command.trim();
+
+  while (true) {
+    const next = normalized
+      .replace(/^(?:[A-Za-z_][A-Za-z0-9_]*=(?:"[^"]*"|'[^']*'|\S+)\s+)+/, "")
+      .replace(/^set\s+-[A-Za-z]+\s*&&\s*/, "")
+      .replace(/^cd\s+(?:"[^"]+"|'[^']+'|\S+)\s*&&\s*/, "")
+      .trim();
+
+    if (next === normalized) {
+      break;
+    }
+
+    normalized = next;
+  }
+
+  const primarySegment = normalized.split("|")[0]?.trim() ?? normalized;
+  return primarySegment.replace(/\s+2>&1$/, "").trim().toLowerCase();
 }

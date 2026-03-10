@@ -56,7 +56,12 @@ export function createSearchFilesTool(args: {
         tool: "search_files"
       });
 
-      return excerpt.length > 0 ? excerpt : "No matches found.";
+      return JSON.stringify({
+        matches,
+        ok: true,
+        path: parsed.path ?? ".",
+        query: parsed.query
+      });
     }
   };
 }

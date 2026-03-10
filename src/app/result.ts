@@ -6,6 +6,7 @@ export function resultFromSession(session: SessionRecord): CommandResult {
     session.pendingAction === null
       ? null
       : {
+          actionClass: session.pendingAction.approval.actionClass,
           ...(session.pendingAction.tool === "run_shell"
             ? { command: session.pendingAction.action.command }
             : { operationCount: session.pendingAction.action.operations.length }),

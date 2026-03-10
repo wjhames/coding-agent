@@ -61,8 +61,9 @@ export function createWritePlanTool(args: {
       const nextPlan = normalizePlan(parsed, args.getPlan());
       args.setPlan(nextPlan);
       return JSON.stringify({
-        ok: true,
         itemCount: nextPlan.items.length,
+        ok: true,
+        plan: nextPlan,
         summary: nextPlan.summary
       });
     }

@@ -24,7 +24,7 @@ describe("read-only tools", () => {
       }
     });
 
-    await expect(tool.run({ limit: 10 })).resolves.toContain("src/config.ts");
+    await expect(tool.run({ limit: 10 })).resolves.toContain("\"entries\":[\"README.md\",\"src/config.ts\"]");
     expect(observations).toHaveLength(1);
   });
 
@@ -39,7 +39,7 @@ describe("read-only tools", () => {
       tool.run({
         path: "src/config.ts"
       })
-    ).resolves.toBe("src/config.ts");
+    ).resolves.toBe("{\"entries\":[\"src/config.ts\"],\"ok\":true,\"path\":\"src/config.ts\"}");
   });
 
   it("reads a file with line numbers", async () => {
@@ -58,7 +58,7 @@ describe("read-only tools", () => {
         startLine: 1,
         maxLines: 2
       })
-    ).resolves.toContain("1: export const value = 1;");
+    ).resolves.toContain("\"excerpt\":\"1: export const value = 1;");
     expect(observations).toHaveLength(1);
   });
 
@@ -76,7 +76,7 @@ describe("read-only tools", () => {
       tool.run({
         query: "value = 1"
       })
-    ).resolves.toContain("src/config.ts:1:");
+    ).resolves.toContain("\"matches\":[\"src/config.ts:1:");
     expect(observations).toHaveLength(1);
   });
 
@@ -92,7 +92,7 @@ describe("read-only tools", () => {
         path: "src/config.ts",
         query: "value = 1"
       })
-    ).resolves.toContain("src/config.ts:1:");
+    ).resolves.toContain("\"matches\":[\"src/config.ts:1:");
   });
 
   it("returns a normal error when asked to read a directory", async () => {

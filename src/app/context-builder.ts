@@ -63,10 +63,10 @@ export function buildExecutionContext(args: {
     ]);
   }
 
-  const memoryLines = [
+  const memoryLines = dedupeLines([
     ...args.memory.working.map((entry) => `- ${entry.summary}`),
     ...args.memory.decisions.slice(-4).map((entry) => `- ${entry.summary}`)
-  ];
+  ]);
   if (memoryLines.length > 0) {
     pushSection(sections, ["Memory:", ...truncateLines(memoryLines, SECTION_BUDGET.memory)]);
   }
@@ -89,7 +89,7 @@ export function buildExecutionContext(args: {
     pushSection(sections, [
       "Recent observations:",
       ...truncateLines(
-        args.observations.slice(-4).map((observation) => `- ${observation.summary}`),
+        dedupeLines(args.observations.slice(-6).map((observation) => `- ${observation.summary}`)),
         SECTION_BUDGET.observations
       )
     ]);
@@ -142,4 +142,8 @@ function truncateLines(lines: string[], budget: number): string[] {
   }
 
   return output;
+}
+
+function dedupeLines(lines: string[]): string[] {
+  return [...new Set(lines)];
 }

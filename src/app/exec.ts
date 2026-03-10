@@ -19,7 +19,7 @@ import { loadGuidance, type LoadedGuidance } from "./guidance.js";
 import { deriveMemory } from "./memory.js";
 import { resultFromSession } from "./result.js";
 import { runVerificationCommands } from "./verification-runner.js";
-import { inferVerificationCommands } from "./verification.js";
+import { planVerificationCommands } from "./verification.js";
 import {
   loadConfig,
   resolveExecutionConfig,
@@ -183,10 +183,10 @@ export async function continueExec(args: {
     fetchImpl: args.fetchImpl,
     options: args.options,
     prompt: buildResumePrompt(args.session),
-      sessionHomeDir: args.sessionHomeDir,
-      state
-    });
-  }
+    sessionHomeDir: args.sessionHomeDir,
+    state
+  });
+}
 
 async function executeTask(args: {
   cwd: string;
@@ -214,9 +214,10 @@ async function executeTask(args: {
     prompt: args.prompt,
     repoGuidanceFiles: repoContext.guidanceFiles
   });
-  const verificationCommands = inferVerificationCommands({
+  const verificationPlan = planVerificationCommands({
     packageScripts: repoContext.packageScripts
   });
+  const verificationCommands = verificationPlan.commands;
   const repoContextSummary = toRepoContextSummary(repoContext);
   const state =
     args.state ??
@@ -250,6 +251,8 @@ async function executeTask(args: {
         passed: false,
         ran: false,
         runs: [],
+        selectedCommands: verificationCommands,
+        skippedCommands: verificationPlan.skippedCommands,
         status: "not_run"
       }
     });
@@ -283,7 +286,8 @@ async function executeTask(args: {
       state.events.push(createVerificationStartedEvent(verificationCommands));
       state.verification = await runVerificationCommands({
         commands: verificationCommands,
-        cwd: args.cwd
+        cwd: args.cwd,
+        skippedCommands: verificationPlan.skippedCommands
       });
       state.events.push(createVerificationCompletedEvent(state.verification));
       appendVerificationObservations(state);
@@ -307,7 +311,8 @@ async function executeTask(args: {
         state.events.push(createVerificationStartedEvent(verificationCommands));
         state.verification = await runVerificationCommands({
           commands: verificationCommands,
-          cwd: args.cwd
+          cwd: args.cwd,
+          skippedCommands: verificationPlan.skippedCommands
         });
         state.events.push(createVerificationCompletedEvent(state.verification));
         appendVerificationObservations(state);
@@ -324,6 +329,8 @@ async function executeTask(args: {
         passed: false,
         ran: false,
         runs: [],
+        selectedCommands: verificationCommands,
+        skippedCommands: verificationPlan.skippedCommands,
         status: "not_run"
       };
       syncDerivedState(state);
@@ -1064,6 +1071,14 @@ function buildFinalSummary(
     );
   } else if (details.verification.notRunReason) {
     lines.push(`Verification not run: ${details.verification.notRunReason}`);
+  }
+
+  if (details.verification.skippedCommands.length > 0) {
+    lines.push(
+      `Verification skipped: ${details.verification.skippedCommands
+        .map((item) => `${item.command} (${item.reason})`)
+        .join(", ")}`
+    );
   }
 
   return lines.join("\n\n");
