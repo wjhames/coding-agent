@@ -13,8 +13,10 @@ export async function runInteractiveApp(args: {
 }): Promise<number> {
   const stdin = process.stdin;
   const stdout = args.io?.stdout ?? process.stdout;
+  const terminal = process.stdout;
+  let restoredScreen = false;
 
-  if (!stdin.isTTY || typeof process.stdout.columns !== "number" || typeof process.stdout.rows !== "number") {
+  if (!stdin.isTTY || typeof terminal.columns !== "number" || typeof terminal.rows !== "number") {
     stdout.write("Interactive mode requires a TTY.\n");
     return 1;
   }
@@ -28,6 +30,15 @@ export async function runInteractiveApp(args: {
     limit: 5
   }).catch(() => []);
 
+  const restoreScreen = () => {
+    if (restoredScreen) {
+      return;
+    }
+    restoredScreen = true;
+    stdout.write("\x1b[?1049l");
+  };
+
+  stdout.write("\x1b[?1049h\x1b[2J\x1b[H");
   const instance = render(
     React.createElement(InteractiveApp, {
       doctor,
@@ -38,11 +49,11 @@ export async function runInteractiveApp(args: {
     }),
     {
       exitOnCtrlC: false,
-      incrementalRendering: true,
-      maxFps: 30,
+      incrementalRendering: false,
+      maxFps: 20,
       patchConsole: false,
       stdin,
-      stdout: process.stdout
+      stdout: terminal
     }
   );
 
@@ -55,10 +66,13 @@ export async function runInteractiveApp(args: {
         }
       | undefined;
     if (payload?.sessionId) {
+      restoreScreen();
       stdout.write(`Last session: ${payload.sessionId} (${payload.status})\n`);
+      return payload?.code ?? 0;
     }
     return payload?.code ?? 0;
   } finally {
     instance.cleanup();
+    restoreScreen();
   }
 }
