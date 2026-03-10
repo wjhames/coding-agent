@@ -9,6 +9,8 @@ import {
 } from "./schema.js";
 
 export const DEFAULT_CONFIG_FILE = ".coding-agent.json";
+export const DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1";
+export const DEFAULT_OPENAI_API_KEY_ENV = "OPENAI_API_KEY";
 
 export interface ResolvedExecutionConfig {
   apiKeyEnv: string | undefined;
@@ -55,15 +57,49 @@ export function resolveExecutionConfig(args: {
   const profile = profileName ? readProfile(config, profileName) : undefined;
 
   return {
-    apiKeyEnv: profile?.apiKeyEnv,
+    apiKeyEnv: profile?.apiKeyEnv ?? DEFAULT_OPENAI_API_KEY_ENV,
     approvalPolicy:
       normalizeApprovalPolicy(cliOptions.approvalPolicy) ?? profile?.approvalPolicy,
-    baseUrl: cliOptions.baseUrl ?? profile?.baseUrl,
+    baseUrl: cliOptions.baseUrl ?? profile?.baseUrl ?? DEFAULT_OPENAI_BASE_URL,
     maxSteps: cliOptions.maxSteps ?? profile?.maxSteps,
     model: cliOptions.model ?? profile?.model,
     networkEgress: profile?.networkEgress,
     profileName,
     timeout: cliOptions.timeout ?? profile?.timeout
+  };
+}
+
+export interface ResolvedLlmConfig {
+  apiKey: string;
+  apiKeyEnv: string;
+  baseUrl: string;
+  model: string;
+}
+
+export function resolveLlmConfig(args: {
+  executionConfig: ResolvedExecutionConfig;
+  env: NodeJS.ProcessEnv;
+}): ResolvedLlmConfig {
+  const { executionConfig, env } = args;
+
+  if (!executionConfig.model) {
+    throw new ConfigError("A model is required. Set it in `.coding-agent.json` or pass `--model`.");
+  }
+
+  const apiKeyEnv = executionConfig.apiKeyEnv ?? DEFAULT_OPENAI_API_KEY_ENV;
+  const apiKey = env[apiKeyEnv];
+
+  if (!apiKey) {
+    throw new ConfigError(
+      `API key env \`${apiKeyEnv}\` is not set.`
+    );
+  }
+
+  return {
+    apiKey,
+    apiKeyEnv,
+    baseUrl: executionConfig.baseUrl ?? DEFAULT_OPENAI_BASE_URL,
+    model: executionConfig.model
   };
 }
 
