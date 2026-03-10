@@ -13,6 +13,7 @@ import type { SessionRecord } from "../session/store.js";
 
 const CONTEXT_BUDGET_CHARS = 18_000;
 const MAX_GROUPED_ACTIVITY_LINES = 8;
+const BLANK_RENDER_LINE = " ";
 
 type ActivityBucket = "command" | "edit" | "explore" | "plan" | "verification";
 type BlockTone = "default" | "dim" | "success" | "warning";
@@ -536,7 +537,7 @@ function renderBlock(
         color: "#f5f5f5",
         text: ` ${padLine(line, args.width - 2)} `
       })),
-      { text: "" }
+      { text: BLANK_RENDER_LINE }
     ];
   }
 
@@ -545,7 +546,7 @@ function renderBlock(
       ...wrapForRender(block.lines.join("\n"), args.width).map((line) => ({
         text: line
       })),
-      { text: "" }
+      { text: BLANK_RENDER_LINE }
     ];
   }
 
@@ -555,7 +556,7 @@ function renderBlock(
         dimColor: block.tone === "dim",
         text: line
       })),
-      { text: "" }
+      { text: BLANK_RENDER_LINE }
     ];
   }
 
@@ -607,7 +608,7 @@ function renderLabeledBlock(
     }
   }
 
-  lines.push({ text: "" });
+  lines.push({ text: BLANK_RENDER_LINE });
   return lines;
 }
 
@@ -635,22 +636,22 @@ function renderComposer(state: InteractiveModel, width: number, hasTranscript: b
     }
   ];
 
-  return hasTranscript ? [{ text: "" }, ...rendered] : rendered;
+  return hasTranscript ? [{ text: BLANK_RENDER_LINE }, ...rendered] : rendered;
 }
 
 function compactBlankLines(lines: RenderLine[]): RenderLine[] {
   const compacted: RenderLine[] = [];
 
   for (const line of lines) {
-    const isBlank = line.text.length === 0;
+    const isBlank = line.text.trim().length === 0;
     const previous = compacted.at(-1);
-    if (isBlank && previous?.text.length === 0) {
+    if (isBlank && previous && previous.text.trim().length === 0) {
       continue;
     }
-    compacted.push(line);
+    compacted.push(isBlank ? { ...line, text: BLANK_RENDER_LINE } : line);
   }
 
-  while (compacted.at(-1)?.text.length === 0) {
+  while (compacted.at(-1)?.text.trim().length === 0) {
     compacted.pop();
   }
 
@@ -663,7 +664,7 @@ function padViewportTop(lines: RenderLine[], height: number): RenderLine[] {
   }
 
   return [
-    ...Array.from({ length: height - lines.length }, () => ({ text: "" })),
+    ...Array.from({ length: height - lines.length }, () => ({ text: BLANK_RENDER_LINE })),
     ...lines
   ];
 }

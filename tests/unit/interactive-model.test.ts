@@ -231,8 +231,8 @@ describe("interactive model", () => {
     const composerIndex = lines.findIndex((line) => line.text.includes("Type a task"));
 
     expect(composerIndex).toBeGreaterThan(0);
-    expect(lines[composerIndex - 1]?.text).toBe("");
-    expect(lines[composerIndex - 2]?.text).not.toBe("");
+    expect(lines[composerIndex - 1]?.text.trim()).toBe("");
+    expect(lines[composerIndex - 2]?.text.trim()).not.toBe("");
   });
 
   it("bottom-aligns an active conversation at the live edge", () => {
@@ -254,7 +254,7 @@ describe("interactive model", () => {
 
     expect(lines).toHaveLength(20);
     expect(lines.at(-1)?.text).toContain("/workspace/project");
-    expect(lines[0]?.text).toBe("");
+    expect(lines[0]?.text.trim()).toBe("");
     expect(userLineIndex).toBeGreaterThan(0);
     expect(userLineIndex).toBeGreaterThan(lines.length - 6);
   });
