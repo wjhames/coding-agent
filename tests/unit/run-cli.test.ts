@@ -103,6 +103,11 @@ describe("runCli", () => {
         }
       ]
     });
+    expect(payload.memory.working.map((entry: { summary: string }) => entry.summary)).toEqual([
+      "Plan: Investigate the repository",
+      "Found 1 match(es) for \"scripts\".",
+      expect.stringContaining("Read package.json lines")
+    ]);
     expect(payload.verification).toEqual({
       commands: ["npm run lint", "npm run typecheck", "npm test"],
       inferred: true,

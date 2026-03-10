@@ -14,6 +14,7 @@ import type {
 import { ApprovalDeniedError, ApprovalRequiredError, type PendingAction } from "./approval.js";
 import { collectRepoContext, type RepoContext } from "./context.js";
 import { loadGuidance, type LoadedGuidance } from "./guidance.js";
+import { deriveMemory } from "./memory.js";
 import { resultFromSession } from "./result.js";
 import { runVerificationCommands } from "./verification-runner.js";
 import { inferVerificationCommands } from "./verification.js";
@@ -110,6 +111,18 @@ export async function continueExec(args: {
       approvalId: args.session.pendingAction.approval.id,
       status: "rejected"
     });
+    const memory = deriveMemory({
+      approvals: args.session.approvals.map((approval) =>
+        approval.id === args.session.pendingAction?.approval.id
+          ? { ...approval, status: "rejected" as const }
+          : approval
+      ),
+      artifacts: args.session.artifacts,
+      changedFiles: args.session.changedFiles,
+      observations: args.session.observations,
+      plan: args.session.plan,
+      verification: args.session.verification
+    });
     const rejectedApprovals = args.session.approvals.map((approval) =>
       approval.id === args.session.pendingAction?.approval.id
         ? { ...approval, status: "rejected" as const }
@@ -125,10 +138,10 @@ export async function continueExec(args: {
         config: args.session.config,
         cwd: args.session.cwd,
         eventCount: args.session.eventCount,
-        events: [rejectionEvent],
+        events: [rejectionEvent, createMemoryUpdatedEvent(memory)],
         guidance: args.session.guidance,
         lastEventAt: rejectionEvent.at,
-        memory: args.session.memory,
+        memory,
         mode: args.session.mode,
         nextActions: args.session.nextActions,
         observations: args.session.observations,
@@ -227,6 +240,7 @@ async function executeTask(args: {
     });
   state.verification.commands = verificationCommands;
   state.verification.inferred = true;
+  syncMemory(state);
 
   const client = createOpenAICompatibleClient({
     apiKey: llmConfig.apiKey,
@@ -257,6 +271,7 @@ async function executeTask(args: {
       });
       state.events.push(createVerificationCompletedEvent(state.verification));
       appendVerificationObservations(state);
+      syncMemory(state);
 
       if (!state.verification.passed) {
         summary = await runModelLoop({
@@ -279,6 +294,7 @@ async function executeTask(args: {
         });
         state.events.push(createVerificationCompletedEvent(state.verification));
         appendVerificationObservations(state);
+        syncMemory(state);
       }
     } else {
       state.verification = {
@@ -287,8 +303,10 @@ async function executeTask(args: {
         passed: true,
         runs: []
       };
+      syncMemory(state);
     }
 
+    syncMemory(state);
     const nextActions = deriveNextActions(state.plan);
     const status = state.verification.passed ? "completed" : "failed";
     const finalSummary = buildFinalSummary(summary, state.verification);
@@ -354,6 +372,7 @@ async function executeTask(args: {
           pendingAction: error.action
         })
       );
+      syncMemory(state);
       state.events.push(
         createSummaryUpdatedEvent({
           nextActions: deriveNextActions(state.plan),
@@ -400,6 +419,7 @@ async function executeTask(args: {
     }
 
     if (error instanceof Error) {
+      syncMemory(state);
       const failedSession = await persistSession({
         existingSession: args.existingSession,
         sessionHomeDir: args.sessionHomeDir,
@@ -492,6 +512,7 @@ function createRuntimeTools(args: {
       setPlan: (nextPlan) => {
         args.state.plan = nextPlan;
         args.state.events.push(createPlanUpdatedEvent(nextPlan));
+        syncMemory(args.state);
       }
     }),
     createListFilesTool({
@@ -601,6 +622,7 @@ function wrapToolWithEvents(args: {
             | "write_plan"
         })
       );
+      syncMemory(args.state);
       return result;
     }
   };
@@ -661,6 +683,7 @@ async function executePendingAction(args: {
   }
 
   args.state.pendingAction = null;
+  syncMemory(args.state);
 }
 
 function createRuntimeState(source: {
@@ -735,6 +758,20 @@ function buildUserPrompt(args: {
     base.push("", `Changed files so far: ${[...args.state.changedFiles].join(", ")}`);
   }
 
+  if (args.state.memory.working.length > 0) {
+    base.push("", "Working memory:");
+    for (const entry of args.state.memory.working) {
+      base.push(`- ${entry.summary}`);
+    }
+  }
+
+  if (args.state.memory.decisions.length > 0) {
+    base.push("", "Decision memory:");
+    for (const entry of args.state.memory.decisions.slice(-4)) {
+      base.push(`- ${entry.summary}`);
+    }
+  }
+
   if (args.state.observations.length > 0) {
     base.push("", "Known observations:");
     for (const observation of args.state.observations.slice(-8)) {
@@ -787,6 +824,9 @@ function buildResumePrompt(session: SessionRecord): string {
     "",
     "Resuming previous session.",
     session.plan ? `Plan: ${serializePlan(session.plan)}` : "No stored plan.",
+    session.memory.working.length > 0
+      ? `Working memory: ${session.memory.working.map((entry) => entry.summary).join(" | ")}`
+      : "No working memory yet.",
     session.changedFiles.length > 0
       ? `Changed files so far: ${session.changedFiles.join(", ")}.`
       : "No changed files yet.",
@@ -826,6 +866,24 @@ function appendVerificationObservations(state: RuntimeState): void {
       tool: "run_shell"
     });
   }
+}
+
+function syncMemory(state: RuntimeState): void {
+  const nextMemory = deriveMemory({
+    approvals: state.approvals,
+    artifacts: state.artifacts,
+    changedFiles: [...state.changedFiles],
+    observations: state.observations,
+    plan: state.plan,
+    verification: state.verification
+  });
+
+  if (JSON.stringify(state.memory) === JSON.stringify(nextMemory)) {
+    return;
+  }
+
+  state.memory = nextMemory;
+  state.events.push(createMemoryUpdatedEvent(nextMemory));
 }
 
 async function persistSession(args: {
