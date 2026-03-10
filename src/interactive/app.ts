@@ -239,7 +239,7 @@ export async function runInteractiveApp(args: {
 
   let resolveExit: ((code: number) => void) | null = null;
 
-  const onKeypress = async (_input: string, key: readline.Key) => {
+  const onKeypress = async (_input: string | undefined, key: readline.Key) => {
     if (key.ctrl && key.name === "c") {
       cleanup();
       resolveExit?.(0);
@@ -299,6 +299,7 @@ export async function runInteractiveApp(args: {
     }
 
     const isPrintableInput =
+      typeof _input === "string" &&
       _input.length === 1 &&
       !_input.startsWith("\u001b") &&
       state.focus === "input" &&
