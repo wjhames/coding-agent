@@ -19,6 +19,7 @@ export function buildExecutionContext(args: {
   observations: Array<{ summary: string }>;
   plan: PlanState | null;
   prompt: string;
+  readOnlyTask: boolean;
   repoContext: RepoContext;
   verificationCommands: string[];
 }): string {
@@ -28,6 +29,7 @@ export function buildExecutionContext(args: {
   pushSection(sections, [
     "Workspace summary:",
     `Working directory: ${args.cwd}`,
+    args.readOnlyTask ? "Task mode: read-only inspection." : "Task mode: normal editing workflow.",
     args.repoContext.isGitRepo ? "Git repository detected." : "No git repository detected.",
     args.repoContext.guidanceFiles.length > 0
       ? `Guidance files: ${args.repoContext.guidanceFiles.join(", ")}.`
@@ -38,9 +40,11 @@ export function buildExecutionContext(args: {
     Object.keys(args.repoContext.packageScripts).length > 0
       ? `Package scripts: ${Object.keys(args.repoContext.packageScripts).join(", ")}.`
       : "No package scripts detected.",
-    args.verificationCommands.length > 0
+    !args.readOnlyTask && args.verificationCommands.length > 0
       ? `Likely verification commands: ${args.verificationCommands.join(", ")}.`
-      : "No verification commands inferred yet."
+      : args.readOnlyTask
+        ? "Verification is not required unless the user explicitly asks for it."
+        : "No verification commands inferred yet."
   ]);
 
   if (args.guidance.summary.activeRules.length > 0) {

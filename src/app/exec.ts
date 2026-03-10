@@ -207,6 +207,7 @@ async function executeTask(args: {
     executionConfig: resolvedConfig
   });
   const repoContext = await collectRepoContext(args.cwd);
+  const readOnlyTask = isLikelyReadOnlyTask(args.prompt);
   const guidance = await loadGuidance({
     cwd: args.cwd,
     homeDir: args.sessionHomeDir,
@@ -245,8 +246,11 @@ async function executeTask(args: {
       verification: {
         commands: verificationCommands,
         inferred: true,
-        passed: true,
-        runs: []
+        notRunReason: "Verification has not run yet.",
+        passed: false,
+        ran: false,
+        runs: [],
+        status: "not_run"
       }
     });
   state.verification.commands = verificationCommands;
@@ -267,6 +271,7 @@ async function executeTask(args: {
       cwd: args.cwd,
       prompt: args.prompt,
       guidance,
+      readOnlyTask,
       repoContext,
       state,
       verificationCommands
@@ -294,6 +299,7 @@ async function executeTask(args: {
             state
           }),
           guidance,
+          readOnlyTask: false,
           repoContext,
           state,
           verificationCommands
@@ -311,16 +317,25 @@ async function executeTask(args: {
       state.verification = {
         commands: verificationCommands,
         inferred: true,
-        passed: true,
-        runs: []
+        notRunReason:
+          state.changedFiles.size === 0
+            ? "No file changes were made."
+            : "No verification commands were inferred.",
+        passed: false,
+        ran: false,
+        runs: [],
+        status: "not_run"
       };
       syncDerivedState(state);
     }
 
     syncDerivedState(state);
     const nextActions = deriveNextActions(state.plan);
-    const status = state.verification.passed ? "completed" : "failed";
-    const finalSummary = buildFinalSummary(summary, state.verification);
+    const status = state.verification.status === "failed" ? "failed" : "completed";
+    const finalSummary = buildFinalSummary(summary, {
+      changedFiles: [...state.changedFiles],
+      verification: state.verification
+    });
     state.events.push(
       createSummaryUpdatedEvent({
         nextActions,
@@ -484,6 +499,7 @@ async function runModelLoop(args: {
   cwd: string;
   prompt: string;
   guidance: LoadedGuidance;
+  readOnlyTask: boolean;
   repoContext: RepoContext;
   state: RuntimeState;
   verificationCommands: string[];
@@ -496,7 +512,10 @@ async function runModelLoop(args: {
   });
   const toolResult = await args.client.runTools({
     maxRounds: args.config.maxSteps ?? 8,
-    systemPrompt: buildSystemPrompt(args.config),
+    systemPrompt: buildSystemPrompt({
+      config: args.config,
+      readOnlyTask: args.readOnlyTask
+    }),
     tools,
     userPrompt: buildExecutionContext({
       changedFiles: [...args.state.changedFiles],
@@ -507,6 +526,7 @@ async function runModelLoop(args: {
       observations: args.state.observations,
       plan: args.state.plan,
       prompt: args.prompt,
+      readOnlyTask: args.readOnlyTask,
       repoContext: args.repoContext,
       verificationCommands: args.verificationCommands
     })
@@ -754,16 +774,33 @@ function createRuntimeState(source: {
   };
 }
 
-function buildSystemPrompt(config: ResolvedExecutionConfig): string {
+function buildSystemPrompt(args: {
+  config: ResolvedExecutionConfig;
+  readOnlyTask: boolean;
+}): string {
   return [
     "You are a CLI coding agent.",
     "Investigate before editing.",
+    args.readOnlyTask
+      ? "This is a read-only task. Do not edit files or run verification unless the user explicitly asks."
+      : "Edit files only when the task requires it.",
+    args.readOnlyTask
+      ? "Keep read-only summaries concise and grounded in files or command output you actually inspected."
+      : "Keep summaries grounded in files or command output you actually inspected.",
+    "Prefer list_files and search_files before read_file when locating code.",
+    "Use workspace-relative paths for file tools unless the user explicitly gave an absolute file path.",
+    "Do not call read_file on directories; use list_files for directories.",
+    "Prefer file tools over run_shell for repository inspection.",
     "Use write_plan before the final answer.",
     "Use list_files, search_files, and read_file to gather context.",
     "Use apply_patch for file edits.",
     "Use run_shell for verification or necessary commands.",
-    `Approval policy is ${config.approvalPolicy ?? "prompt"}.`,
+    "If a tool returns an error, adapt and continue rather than repeating the same failing call.",
+    "Avoid heavy or ignored directories like node_modules, dist, coverage, and .notes unless the task requires them.",
+    `Approval policy is ${args.config.approvalPolicy ?? "prompt"}.`,
     "Do not claim tests ran or files changed when they did not.",
+    "Do not speculate about test failures, implementation gaps, or repository state that you did not directly observe.",
+    "If something was not inspected, say so instead of guessing.",
     "If you make code changes, ensure verification is possible."
   ].join(" ");
 }
@@ -824,6 +861,46 @@ function buildResumePrompt(session: SessionRecord): string {
           .join(" | ")}`
       : "No prior observations."
   ].join("\n");
+}
+
+function isLikelyReadOnlyTask(prompt: string): boolean {
+  const lowered = prompt.toLowerCase();
+  const writeIntent = [
+    "fix",
+    "change",
+    "edit",
+    "update",
+    "modify",
+    "create",
+    "write",
+    "delete",
+    "remove",
+    "rename",
+    "refactor",
+    "implement",
+    "patch",
+    "add "
+  ];
+
+  if (writeIntent.some((token) => lowered.includes(token))) {
+    return false;
+  }
+
+  const readOnlyIntent = [
+    "inspect",
+    "summarize",
+    "summary",
+    "explain",
+    "review",
+    "analyze",
+    "analyse",
+    "understand",
+    "describe",
+    "walk through",
+    "what does"
+  ];
+
+  return readOnlyIntent.some((token) => lowered.includes(token));
 }
 
 function buildVerificationFailurePrompt(args: {
@@ -963,17 +1040,31 @@ function upsertArtifacts(current: Artifact[], next: Artifact[]): Artifact[] {
   return [...map.values()].sort((left, right) => left.path.localeCompare(right.path));
 }
 
-function buildFinalSummary(summary: string, verification: VerificationSummary): string {
-  if (verification.runs.length === 0) {
-    return summary;
+function buildFinalSummary(
+  summary: string,
+  details: {
+    changedFiles: string[];
+    verification: VerificationSummary;
+  }
+): string {
+  const lines = [summary];
+
+  if (details.changedFiles.length > 0) {
+    lines.push(`Changed files: ${details.changedFiles.join(", ")}`);
   }
 
-  const verificationLine = verification.passed
-    ? `Verification passed: ${verification.runs.map((run) => run.command).join(", ")}`
-    : `Verification failed: ${verification.runs
+  if (details.verification.status === "passed") {
+    lines.push(`Verification passed: ${details.verification.runs.map((run) => run.command).join(", ")}`);
+  } else if (details.verification.status === "failed") {
+    lines.push(
+      `Verification failed: ${details.verification.runs
         .filter((run) => !run.passed)
         .map((run) => run.command)
-        .join(", ")}`;
+        .join(", ")}`
+    );
+  } else if (details.verification.notRunReason) {
+    lines.push(`Verification not run: ${details.verification.notRunReason}`);
+  }
 
-  return `${summary}\n\n${verificationLine}`;
+  return lines.join("\n\n");
 }

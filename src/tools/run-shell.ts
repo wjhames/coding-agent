@@ -134,14 +134,51 @@ function shouldRequireApproval(args: {
   config: ResolvedExecutionConfig;
   verificationCommands: string[];
 }): boolean {
-  if (args.verificationCommands.includes(args.command.trim())) {
+  const normalizedCommand = normalizeCommandForApproval(args.command);
+
+  if (args.verificationCommands.some((command) => normalizeCommandForApproval(command) === normalizedCommand)) {
     return false;
   }
 
-  const readOnlyPrefixes = ["git status", "git diff", "pwd", "ls", "find ", "rg ", "cat ", "sed -n"];
-  if (readOnlyPrefixes.some((prefix) => args.command.startsWith(prefix))) {
+  const readOnlyPatterns = [
+    /^git status(?:\s|$)/,
+    /^git diff(?:\s|$)/,
+    /^pwd(?:\s|$)/,
+    /^ls(?:\s|$)/,
+    /^find(?:\s|$)/,
+    /^rg(?:\s|$)/,
+    /^cat(?:\s|$)/,
+    /^sed\s+-n(?:\s|$)/,
+    /^head(?:\s|$)/,
+    /^tail(?:\s|$)/,
+    /^wc(?:\s|$)/,
+    /^stat(?:\s|$)/
+  ];
+  if (readOnlyPatterns.some((pattern) => pattern.test(normalizedCommand))) {
     return false;
   }
 
   return true;
+}
+
+function normalizeCommandForApproval(command: string): string {
+  let normalized = command.trim();
+
+  while (true) {
+    const next = normalized
+      .replace(/^(?:[A-Za-z_][A-Za-z0-9_]*=(?:"[^"]*"|'[^']*'|\S+)\s+)+/, "")
+      .replace(/^set\s+-[A-Za-z]+\s*&&\s*/, "")
+      .replace(/^cd\s+(?:"[^"]+"|'[^']+'|\S+)\s*&&\s*/, "")
+      .trim();
+
+    if (next === normalized) {
+      break;
+    }
+
+    normalized = next;
+  }
+
+  const primarySegment = normalized.split("|")[0]?.trim() ?? normalized;
+
+  return primarySegment.replace(/\s+2>&1$/, "").trim();
 }

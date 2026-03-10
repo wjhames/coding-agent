@@ -18,6 +18,13 @@ export function resolveWorkspacePath(cwd: string, requestedPath = "."): string {
   return resolvedPath;
 }
 
+export function toWorkspaceRelativePath(cwd: string, requestedPath = "."): string {
+  const resolvedPath = resolveWorkspacePath(cwd, requestedPath);
+  const normalizedPath = relative(cwd, resolvedPath);
+
+  return normalizedPath.length > 0 ? normalizedPath : ".";
+}
+
 export async function walkWorkspaceFiles(args: {
   cwd: string;
   limit: number;

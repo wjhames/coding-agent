@@ -6,7 +6,7 @@ import { createDiffArtifact, readMaybeFile } from "../app/diff.js";
 import type { Approval, Artifact, Observation } from "../cli/output.js";
 import type { ResolvedExecutionConfig } from "../config/load.js";
 import type { LlmTool } from "../llm/openai.js";
-import { resolveWorkspacePath } from "./workspace.js";
+import { resolveWorkspacePath, toWorkspaceRelativePath } from "./workspace.js";
 
 export const patchOperationSchema = z.discriminatedUnion("type", [
   z.object({
@@ -146,6 +146,7 @@ export async function applyPatchOperations(args: {
 
 async function applyOperation(cwd: string, operation: PatchOperation): Promise<Artifact> {
   const resolvedPath = resolveWorkspacePath(cwd, operation.path);
+  const relativePath = toWorkspaceRelativePath(cwd, operation.path);
   const before = await readMaybeFile(resolvedPath);
 
   if (operation.type === "replace") {
@@ -163,7 +164,7 @@ async function applyOperation(cwd: string, operation: PatchOperation): Promise<A
     return createDiffArtifact({
       after,
       before,
-      path: operation.path
+      path: relativePath
     });
   }
 
@@ -174,7 +175,7 @@ async function applyOperation(cwd: string, operation: PatchOperation): Promise<A
     return createDiffArtifact({
       after: operation.content,
       before,
-      path: operation.path
+      path: relativePath
     });
   }
 
@@ -187,6 +188,6 @@ async function applyOperation(cwd: string, operation: PatchOperation): Promise<A
   return createDiffArtifact({
     after: null,
     before,
-    path: operation.path
+    path: relativePath
   });
 }

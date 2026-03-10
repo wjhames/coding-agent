@@ -82,6 +82,7 @@ describe("buildExecutionContext", () => {
         ]
       },
       prompt: "fix the config",
+      readOnlyTask: false,
       repoContext: {
         guidanceFiles: ["AGENTS.md"],
         isGitRepo: true,

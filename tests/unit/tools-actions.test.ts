@@ -67,6 +67,46 @@ describe("action tools", () => {
     expect(observations).toHaveLength(1);
   });
 
+  it("normalizes absolute patch paths back to workspace-relative paths", async () => {
+    const cwd = await makeWorkspace();
+    const artifacts: Array<{ path: string }> = [];
+    const changedFiles: string[] = [];
+    const tool = createApplyPatchTool({
+      addApproval: () => undefined,
+      addArtifacts: (nextArtifacts) => {
+        artifacts.push(...nextArtifacts);
+      },
+      addChangedFiles: (files) => {
+        changedFiles.push(...files);
+      },
+      addObservation: () => undefined,
+      config: {
+        approvalPolicy: "auto",
+        baseUrl: "http://localhost:1234/v1",
+        maxSteps: 8,
+        model: "gpt-4.1-mini",
+        networkEgress: false,
+        profileName: "local",
+        timeout: undefined
+      },
+      cwd
+    });
+
+    await tool.run({
+      operations: [
+        {
+          type: "replace",
+          path: join(cwd, "src", "config.ts"),
+          oldText: "value = 1",
+          newText: "value = 2"
+        }
+      ]
+    });
+
+    expect(changedFiles).toEqual(["src/config.ts"]);
+    expect(artifacts[0]?.path).toBe("src/config.ts");
+  });
+
   it("pauses shell side effects when approval policy is prompt", async () => {
     const cwd = await makeWorkspace();
     const tool = createRunShellTool({
@@ -92,6 +132,48 @@ describe("action tools", () => {
         command: "printf 'hi' > created.txt"
       })
     ).rejects.toBeInstanceOf(ApprovalRequiredError);
+  });
+
+  it("allows read-only shell inspection with wrappers under prompt policy", async () => {
+    const cwd = await makeWorkspace();
+    await writeFile(
+      join(cwd, "package.json"),
+      JSON.stringify({
+        scripts: {
+          typecheck: "node -e \"process.exit(0)\""
+        }
+      }),
+      "utf8"
+    );
+    const tool = createRunShellTool({
+      addApproval: () => undefined,
+      addArtifacts: () => undefined,
+      addChangedFiles: () => undefined,
+      addObservation: () => undefined,
+      config: {
+        approvalPolicy: "prompt",
+        baseUrl: "http://localhost:1234/v1",
+        maxSteps: 8,
+        model: "gpt-4.1-mini",
+        networkEgress: false,
+        profileName: "local",
+        timeout: undefined
+      },
+      cwd,
+      verificationCommands: ["npm run typecheck"]
+    });
+
+    await expect(
+      tool.run({
+        command: `cd ${cwd} && ls -la src 2>&1 | head -20`
+      })
+    ).resolves.toContain("config.ts");
+
+    await expect(
+      tool.run({
+        command: `cd ${cwd} && npm run typecheck 2>&1 | head -20`
+      })
+    ).resolves.toContain("\"exitCode\":0");
   });
 });
 

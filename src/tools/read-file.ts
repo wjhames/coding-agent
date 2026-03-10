@@ -1,7 +1,7 @@
 import { z } from "zod";
 import type { Observation } from "../cli/output.js";
 import type { LlmTool } from "../llm/openai.js";
-import { readWorkspaceTextFile } from "./workspace.js";
+import { readWorkspaceTextFile, toWorkspaceRelativePath } from "./workspace.js";
 
 const readFileInputSchema = z.object({
   maxLines: z.number().int().positive().max(200).optional(),
@@ -41,6 +41,7 @@ export function createReadFileTool(args: {
     name: "read_file",
     async run(input) {
       const parsed = readFileInputSchema.parse(input);
+      const normalizedPath = toWorkspaceRelativePath(args.cwd, parsed.path);
       const contents = await readWorkspaceTextFile({
         cwd: args.cwd,
         maxBytes: 32_000,
@@ -56,8 +57,8 @@ export function createReadFileTool(args: {
 
       args.observe({
         excerpt,
-        path: parsed.path,
-        summary: `Read ${parsed.path} lines ${startIndex + 1}-${startIndex + selectedLines.length}.`,
+        path: normalizedPath,
+        summary: `Read ${normalizedPath} lines ${startIndex + 1}-${startIndex + selectedLines.length}.`,
         tool: "read_file"
       });
 
