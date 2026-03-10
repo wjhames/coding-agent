@@ -73,6 +73,36 @@ describe("runCli", () => {
       isGitRepo: true,
       topLevelEntries: [".git", "AGENTS.md", "README.md", "package.json"]
     });
+    expect(payload.guidance).toEqual({
+      activeRules: [
+        "inspect repo",
+        "prefer concise summaries",
+        "repo guidance",
+        "readme"
+      ],
+      sources: [
+        {
+          path: "task",
+          priority: 300,
+          source: "task"
+        },
+        {
+          path: "~/.coding-agent/AGENTS.md",
+          priority: 260,
+          source: "home"
+        },
+        {
+          path: "AGENTS.md",
+          priority: 240,
+          source: "repo"
+        },
+        {
+          path: "README.md",
+          priority: 120,
+          source: "repo"
+        }
+      ]
+    });
     expect(payload.verification).toEqual({
       commands: ["npm run lint", "npm run typecheck", "npm test"],
       inferred: true,
@@ -342,6 +372,7 @@ async function writeHomeConfig(
     }),
     "utf8"
   );
+  await writeFile(join(configDir, "AGENTS.md"), "prefer concise summaries\n", "utf8");
 }
 
 function mockCompletionFetch(content: string) {

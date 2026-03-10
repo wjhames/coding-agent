@@ -13,6 +13,7 @@ import type {
 } from "../cli/output.js";
 import { ApprovalDeniedError, ApprovalRequiredError, type PendingAction } from "./approval.js";
 import { collectRepoContext, type RepoContext } from "./context.js";
+import { loadGuidance, type LoadedGuidance } from "./guidance.js";
 import { resultFromSession } from "./result.js";
 import { runVerificationCommands } from "./verification-runner.js";
 import { inferVerificationCommands } from "./verification.js";
@@ -182,6 +183,12 @@ async function executeTask(args: {
     executionConfig: resolvedConfig
   });
   const repoContext = await collectRepoContext(args.cwd);
+  const guidance = await loadGuidance({
+    cwd: args.cwd,
+    homeDir: args.sessionHomeDir,
+    prompt: args.prompt,
+    repoEntries: repoContext.topLevelEntries
+  });
   const verificationCommands = inferVerificationCommands({
     packageScripts: repoContext.packageScripts
   });
@@ -199,8 +206,8 @@ async function executeTask(args: {
         verificationSummary: null
       },
       guidance: {
-        activeRules: [],
-        sources: []
+        activeRules: guidance.summary.activeRules,
+        sources: guidance.summary.sources
       },
       memory: {
         artifacts: [],
@@ -234,6 +241,7 @@ async function executeTask(args: {
       config: resolvedConfig,
       cwd: args.cwd,
       prompt: args.prompt,
+      guidance,
       repoContext,
       state,
       verificationCommands
@@ -259,6 +267,7 @@ async function executeTask(args: {
             originalPrompt: args.prompt,
             state
           }),
+          guidance,
           repoContext,
           state,
           verificationCommands
@@ -443,6 +452,7 @@ async function runModelLoop(args: {
   config: ResolvedExecutionConfig;
   cwd: string;
   prompt: string;
+  guidance: LoadedGuidance;
   repoContext: RepoContext;
   state: RuntimeState;
   verificationCommands: string[];
@@ -459,6 +469,7 @@ async function runModelLoop(args: {
     tools,
     userPrompt: buildUserPrompt({
       cwd: args.cwd,
+      guidance: args.guidance,
       prompt: args.prompt,
       repoContext: args.repoContext,
       state: args.state,
@@ -682,6 +693,7 @@ function createRuntimeState(source: {
 
 function buildUserPrompt(args: {
   cwd: string;
+  guidance: LoadedGuidance;
   prompt: string;
   repoContext: RepoContext;
   state: RuntimeState;
@@ -708,6 +720,13 @@ function buildUserPrompt(args: {
       : "No verification commands inferred yet."
   ];
 
+  if (args.guidance.summary.activeRules.length > 0) {
+    base.push("", "Active guidance:");
+    for (const rule of args.guidance.summary.activeRules) {
+      base.push(`- ${rule}`);
+    }
+  }
+
   if (args.state.plan) {
     base.push("", "Current plan:", serializePlan(args.state.plan));
   }
@@ -725,6 +744,14 @@ function buildUserPrompt(args: {
 
   for (const snippet of args.repoContext.snippets) {
     base.push("", `Snippet from ${snippet.path}:`, snippet.content);
+  }
+
+  for (const layer of args.guidance.layers) {
+    if (layer.source === "task") {
+      continue;
+    }
+
+    base.push("", `Guidance from ${layer.path}:`, layer.content);
   }
 
   return base.join("\n");
