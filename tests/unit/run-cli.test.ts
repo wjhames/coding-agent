@@ -108,6 +108,12 @@ describe("runCli", () => {
       "Found 1 match(es) for \"scripts\".",
       expect.stringContaining("Read package.json lines")
     ]);
+    expect(payload.compaction).toEqual({
+      changedFilesSummary: null,
+      eventSummary: null,
+      observationSummary: null,
+      verificationSummary: null
+    });
     expect(payload.verification).toEqual({
       commands: ["npm run lint", "npm run typecheck", "npm test"],
       inferred: true,

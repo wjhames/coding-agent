@@ -12,7 +12,9 @@ import type {
   VerificationSummary
 } from "../cli/output.js";
 import { ApprovalDeniedError, ApprovalRequiredError, type PendingAction } from "./approval.js";
+import { deriveCompaction } from "./compaction.js";
 import { collectRepoContext, type RepoContext } from "./context.js";
+import { buildExecutionContext } from "./context-builder.js";
 import { loadGuidance, type LoadedGuidance } from "./guidance.js";
 import { deriveMemory } from "./memory.js";
 import { resultFromSession } from "./result.js";
@@ -39,7 +41,6 @@ import {
   createSessionCompletedEvent,
   createSessionFailedEvent,
   createSessionPausedEvent,
-  createSessionStartedEvent,
   createSummaryUpdatedEvent,
   createToolCalledEvent,
   createToolResultRecordedEvent,
@@ -123,6 +124,12 @@ export async function continueExec(args: {
       plan: args.session.plan,
       verification: args.session.verification
     });
+    const compaction = deriveCompaction({
+      changedFiles: args.session.changedFiles,
+      events: [],
+      observations: args.session.observations,
+      verification: args.session.verification
+    });
     const rejectedApprovals = args.session.approvals.map((approval) =>
       approval.id === args.session.pendingAction?.approval.id
         ? { ...approval, status: "rejected" as const }
@@ -134,11 +141,15 @@ export async function continueExec(args: {
         approvals: rejectedApprovals,
         artifacts: args.session.artifacts,
         changedFiles: args.session.changedFiles,
-        compaction: args.session.compaction,
+        compaction,
         config: args.session.config,
         cwd: args.session.cwd,
         eventCount: args.session.eventCount,
-        events: [rejectionEvent, createMemoryUpdatedEvent(memory)],
+        events: [
+          rejectionEvent,
+          createMemoryUpdatedEvent(memory),
+          createCompactionUpdatedEvent(compaction)
+        ],
         guidance: args.session.guidance,
         lastEventAt: rejectionEvent.at,
         memory,
@@ -240,7 +251,7 @@ async function executeTask(args: {
     });
   state.verification.commands = verificationCommands;
   state.verification.inferred = true;
-  syncMemory(state);
+  syncDerivedState(state);
 
   const client = createOpenAICompatibleClient({
     apiKey: llmConfig.apiKey,
@@ -271,7 +282,7 @@ async function executeTask(args: {
       });
       state.events.push(createVerificationCompletedEvent(state.verification));
       appendVerificationObservations(state);
-      syncMemory(state);
+      syncDerivedState(state);
 
       if (!state.verification.passed) {
         summary = await runModelLoop({
@@ -294,7 +305,7 @@ async function executeTask(args: {
         });
         state.events.push(createVerificationCompletedEvent(state.verification));
         appendVerificationObservations(state);
-        syncMemory(state);
+        syncDerivedState(state);
       }
     } else {
       state.verification = {
@@ -303,10 +314,10 @@ async function executeTask(args: {
         passed: true,
         runs: []
       };
-      syncMemory(state);
+      syncDerivedState(state);
     }
 
-    syncMemory(state);
+    syncDerivedState(state);
     const nextActions = deriveNextActions(state.plan);
     const status = state.verification.passed ? "completed" : "failed";
     const finalSummary = buildFinalSummary(summary, state.verification);
@@ -372,7 +383,7 @@ async function executeTask(args: {
           pendingAction: error.action
         })
       );
-      syncMemory(state);
+      syncDerivedState(state);
       state.events.push(
         createSummaryUpdatedEvent({
           nextActions: deriveNextActions(state.plan),
@@ -419,7 +430,7 @@ async function executeTask(args: {
     }
 
     if (error instanceof Error) {
-      syncMemory(state);
+      syncDerivedState(state);
       const failedSession = await persistSession({
         existingSession: args.existingSession,
         sessionHomeDir: args.sessionHomeDir,
@@ -487,12 +498,16 @@ async function runModelLoop(args: {
     maxRounds: args.config.maxSteps ?? 8,
     systemPrompt: buildSystemPrompt(args.config),
     tools,
-    userPrompt: buildUserPrompt({
+    userPrompt: buildExecutionContext({
+      changedFiles: [...args.state.changedFiles],
+      compaction: args.state.compaction,
       cwd: args.cwd,
       guidance: args.guidance,
+      memory: args.state.memory,
+      observations: args.state.observations,
+      plan: args.state.plan,
       prompt: args.prompt,
       repoContext: args.repoContext,
-      state: args.state,
       verificationCommands: args.verificationCommands
     })
   });
@@ -512,7 +527,7 @@ function createRuntimeTools(args: {
       setPlan: (nextPlan) => {
         args.state.plan = nextPlan;
         args.state.events.push(createPlanUpdatedEvent(nextPlan));
-        syncMemory(args.state);
+        syncDerivedState(args.state);
       }
     }),
     createListFilesTool({
@@ -622,7 +637,7 @@ function wrapToolWithEvents(args: {
             | "write_plan"
         })
       );
-      syncMemory(args.state);
+      syncDerivedState(args.state);
       return result;
     }
   };
@@ -683,7 +698,7 @@ async function executePendingAction(args: {
   }
 
   args.state.pendingAction = null;
-  syncMemory(args.state);
+  syncDerivedState(args.state);
 }
 
 function createRuntimeState(source: {
@@ -712,86 +727,6 @@ function createRuntimeState(source: {
     plan: source.plan,
     verification: source.verification
   };
-}
-
-function buildUserPrompt(args: {
-  cwd: string;
-  guidance: LoadedGuidance;
-  prompt: string;
-  repoContext: RepoContext;
-  state: RuntimeState;
-  verificationCommands: string[];
-}): string {
-  const base = [
-    "User task:",
-    args.prompt,
-    "",
-    "Workspace summary:",
-    `Working directory: ${args.cwd}`,
-    args.repoContext.isGitRepo ? "Git repository detected." : "No git repository detected.",
-    args.repoContext.guidanceFiles.length > 0
-      ? `Guidance files: ${args.repoContext.guidanceFiles.join(", ")}.`
-      : "No guidance files detected.",
-    args.repoContext.topLevelEntries.length > 0
-      ? `Workspace entries: ${args.repoContext.topLevelEntries.join(", ")}.`
-      : "Workspace is empty.",
-    Object.keys(args.repoContext.packageScripts).length > 0
-      ? `Package scripts: ${Object.keys(args.repoContext.packageScripts).join(", ")}.`
-      : "No package scripts detected.",
-    args.verificationCommands.length > 0
-      ? `Likely verification commands: ${args.verificationCommands.join(", ")}.`
-      : "No verification commands inferred yet."
-  ];
-
-  if (args.guidance.summary.activeRules.length > 0) {
-    base.push("", "Active guidance:");
-    for (const rule of args.guidance.summary.activeRules) {
-      base.push(`- ${rule}`);
-    }
-  }
-
-  if (args.state.plan) {
-    base.push("", "Current plan:", serializePlan(args.state.plan));
-  }
-
-  if (args.state.changedFiles.size > 0) {
-    base.push("", `Changed files so far: ${[...args.state.changedFiles].join(", ")}`);
-  }
-
-  if (args.state.memory.working.length > 0) {
-    base.push("", "Working memory:");
-    for (const entry of args.state.memory.working) {
-      base.push(`- ${entry.summary}`);
-    }
-  }
-
-  if (args.state.memory.decisions.length > 0) {
-    base.push("", "Decision memory:");
-    for (const entry of args.state.memory.decisions.slice(-4)) {
-      base.push(`- ${entry.summary}`);
-    }
-  }
-
-  if (args.state.observations.length > 0) {
-    base.push("", "Known observations:");
-    for (const observation of args.state.observations.slice(-8)) {
-      base.push(`- ${observation.summary}`);
-    }
-  }
-
-  for (const snippet of args.repoContext.snippets) {
-    base.push("", `Snippet from ${snippet.path}:`, snippet.content);
-  }
-
-  for (const layer of args.guidance.layers) {
-    if (layer.source === "task") {
-      continue;
-    }
-
-    base.push("", `Guidance from ${layer.path}:`, layer.content);
-  }
-
-  return base.join("\n");
 }
 
 function buildSystemPrompt(config: ResolvedExecutionConfig): string {
@@ -824,6 +759,9 @@ function buildResumePrompt(session: SessionRecord): string {
     "",
     "Resuming previous session.",
     session.plan ? `Plan: ${serializePlan(session.plan)}` : "No stored plan.",
+    session.compaction.observationSummary
+      ? `Compaction: ${session.compaction.observationSummary}`
+      : "No compaction summary yet.",
     session.memory.working.length > 0
       ? `Working memory: ${session.memory.working.map((entry) => entry.summary).join(" | ")}`
       : "No working memory yet.",
@@ -884,6 +822,27 @@ function syncMemory(state: RuntimeState): void {
 
   state.memory = nextMemory;
   state.events.push(createMemoryUpdatedEvent(nextMemory));
+}
+
+function syncCompaction(state: RuntimeState): void {
+  const nextCompaction = deriveCompaction({
+    changedFiles: [...state.changedFiles],
+    events: state.events,
+    observations: state.observations,
+    verification: state.verification
+  });
+
+  if (JSON.stringify(state.compaction) === JSON.stringify(nextCompaction)) {
+    return;
+  }
+
+  state.compaction = nextCompaction;
+  state.events.push(createCompactionUpdatedEvent(nextCompaction));
+}
+
+function syncDerivedState(state: RuntimeState): void {
+  syncMemory(state);
+  syncCompaction(state);
 }
 
 async function persistSession(args: {
