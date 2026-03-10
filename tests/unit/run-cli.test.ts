@@ -275,6 +275,14 @@ describe("runCli", () => {
     });
   });
 
+  it("rejects interactive mode without a tty", async () => {
+    const io = createMemoryIo();
+    const exitCode = await runCli([], io.streams, {});
+
+    expect(exitCode).toBe(1);
+    expect(io.stdout).toContain("Interactive mode requires a TTY.");
+  });
+
   it("pauses on apply_patch under prompt policy and resumes with auto approval", async () => {
     const cwd = await makeWorkspace();
     const homeDir = await makeHomeDir();

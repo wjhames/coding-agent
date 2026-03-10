@@ -7,6 +7,7 @@ import { ConfigError } from "../config/load.js";
 import { LlmError } from "../llm/openai.js";
 import { SessionStoreError } from "../session/store.js";
 import { listSessions, resumeTask, runDoctor, startTask } from "../runtime/api.js";
+import { runInteractiveApp } from "../interactive/app.js";
 import {
   renderDoctorHelp,
   renderExecHelp,
@@ -56,8 +57,11 @@ export async function runCli(
         return 0;
       }
 
-      io.stdout.write("Interactive mode is not implemented yet.\n");
-      return 1;
+      return runInteractiveApp({
+        io,
+        options: invocation.options,
+        runtime
+      });
     }
 
     if (invocation.options.help) {
@@ -116,6 +120,7 @@ export async function runCli(
 
       const result = await startTask({
         environment: runtime,
+        observer: undefined,
         options: invocation.options,
         prompt: invocation.prompt
       });
@@ -132,6 +137,7 @@ export async function runCli(
 
     const result = await resumeTask({
       environment: runtime,
+      observer: undefined,
       options: invocation.options,
       ...(invocation.sessionId ? { sessionId: invocation.sessionId } : {})
     });
