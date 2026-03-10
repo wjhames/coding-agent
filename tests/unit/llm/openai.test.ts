@@ -323,4 +323,98 @@ describe("createOpenAICompatibleClient", () => {
       })
     );
   });
+
+  it("returns tool errors to the model instead of aborting the loop", async () => {
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            choices: [
+              {
+                message: {
+                  content: null,
+                  tool_calls: [
+                    {
+                      id: "call-1",
+                      type: "function",
+                      function: {
+                        name: "read_file",
+                        arguments: JSON.stringify({
+                          path: "/tmp/not-a-file"
+                        })
+                      }
+                    }
+                  ]
+                }
+              }
+            ]
+          }),
+          {
+            status: 200,
+            headers: {
+              "content-type": "application/json"
+            }
+          }
+        )
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            choices: [
+              {
+                message: {
+                  content: "Recovered after tool error."
+                }
+              }
+            ]
+          }),
+          {
+            status: 200,
+            headers: {
+              "content-type": "application/json"
+            }
+          }
+        )
+      );
+
+    const client = createOpenAICompatibleClient({
+      apiKey: "secret",
+      baseUrl: "http://localhost:1234/v1",
+      fetchImpl,
+      model: "gpt-4.1-mini"
+    });
+
+    await expect(
+      client.runTools({
+        systemPrompt: "system",
+        tools: [
+          {
+            description: "Read a file.",
+            inputJsonSchema: { type: "object" },
+            inputSchema: z.object({
+              path: z.string()
+            }),
+            name: "read_file",
+            run: vi.fn().mockRejectedValue(new Error("Requested path is not a file."))
+          }
+        ],
+        userPrompt: "user"
+      })
+    ).resolves.toEqual({
+      text: "Recovered after tool error."
+    });
+
+    const secondCall = fetchImpl.mock.calls[1];
+    expect(typeof secondCall?.[1]?.body).toBe("string");
+    const requestBody = JSON.parse(String(secondCall?.[1]?.body)) as {
+      messages: Array<{ content?: string; role: string }>;
+    };
+    expect(requestBody.messages.at(-1)).toEqual({
+      content:
+        "{\"ok\":false,\"error\":\"tool_error\",\"message\":\"Requested path is not a file.\"}",
+      role: "tool",
+      tool_call_id: "call-1"
+    });
+  });
 });

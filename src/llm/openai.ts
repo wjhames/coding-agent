@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { ApprovalRequiredError } from "../app/approval.js";
 
 const toolCallSchema = z.object({
   id: z.string(),
@@ -140,17 +141,10 @@ export function createOpenAICompatibleClient(
         });
 
         for (const toolCall of toolCalls) {
-          const tool = request.tools.find(
-            (candidate) => candidate.name === toolCall.function.name
-          );
-
-          if (!tool) {
-            throw new LlmError(`Model requested unknown tool \`${toolCall.function.name}\`.`);
-          }
-
-          const parsedArgs = parseToolArguments(toolCall.function.arguments);
-          const validatedArgs = tool.inputSchema.parse(parsedArgs);
-          const toolResult = await tool.run(validatedArgs);
+          const toolResult = await executeToolCall({
+            toolCall,
+            tools: request.tools
+          });
 
           messages.push({
             role: "tool",
@@ -278,5 +272,35 @@ function parseToolArguments(raw: string): unknown {
     return JSON.parse(raw);
   } catch {
     throw new LlmError("Model returned invalid tool arguments.");
+  }
+}
+
+async function executeToolCall(args: {
+  toolCall: z.infer<typeof toolCallSchema>;
+  tools: LlmTool[];
+}): Promise<string> {
+  const tool = args.tools.find((candidate) => candidate.name === args.toolCall.function.name);
+
+  if (!tool) {
+    return JSON.stringify({
+      ok: false,
+      error: "unknown_tool",
+      message: `Unknown tool: ${args.toolCall.function.name}`
+    });
+  }
+
+  try {
+    const parsedArgs = parseToolArguments(args.toolCall.function.arguments);
+    return await tool.run(parsedArgs);
+  } catch (error) {
+    if (error instanceof ApprovalRequiredError) {
+      throw error;
+    }
+
+    return JSON.stringify({
+      ok: false,
+      error: "tool_error",
+      message: error instanceof Error ? error.message : "Unknown tool execution failure."
+    });
   }
 }

@@ -603,19 +603,50 @@ function wrapToolWithEvents(args: {
       args.state.events.push(
         createToolCalledEvent({
           inputSummary: summarizeToolInput(input),
-          tool: args.tool.name as
-            | "apply_patch"
-            | "list_files"
-            | "read_file"
-            | "run_shell"
-            | "search_files"
-            | "write_plan"
+          tool: normalizeToolName(args.tool.name)
         })
       );
       const beforeObservationCount = args.state.observations.length;
       const beforeArtifactCount = args.state.artifacts.length;
       const beforeChangedFiles = new Set(args.state.changedFiles);
-      const result = await args.tool.run(input);
+      let result: string;
+
+      try {
+        result = await args.tool.run(input);
+      } catch (error) {
+        if (error instanceof ApprovalRequiredError) {
+          throw error;
+        }
+
+        const message = error instanceof Error ? error.message : "Unknown tool failure.";
+        const observableTool = toObservationToolName(args.tool.name);
+        const observation =
+          observableTool === null
+            ? null
+            : ({
+                excerpt: message,
+                summary: `Tool error from ${args.tool.name}: ${message}`,
+                tool: observableTool
+              } satisfies Observation);
+
+        if (observation) {
+          args.state.observations.push(observation);
+        }
+        args.state.events.push(
+          createToolResultRecordedEvent({
+            ...(observation ? { observation } : {}),
+            tool: normalizeToolName(args.tool.name)
+          })
+        );
+        syncDerivedState(args.state);
+
+        return JSON.stringify({
+          ok: false,
+          error: "tool_error",
+          message
+        });
+      }
+
       const latestObservation = args.state.observations.at(-1);
       const newArtifacts = args.state.artifacts.slice(beforeArtifactCount);
       const newChangedFiles = [...args.state.changedFiles].filter(
@@ -628,13 +659,7 @@ function wrapToolWithEvents(args: {
             : {}),
           ...(newArtifacts.length > 0 ? { artifacts: newArtifacts } : {}),
           ...(newChangedFiles.length > 0 ? { changedFiles: newChangedFiles } : {}),
-          tool: args.tool.name as
-            | "apply_patch"
-            | "list_files"
-            | "read_file"
-            | "run_shell"
-            | "search_files"
-            | "write_plan"
+          tool: normalizeToolName(args.tool.name)
         })
       );
       syncDerivedState(args.state);
@@ -751,6 +776,30 @@ function summarizeToolInput(input: unknown): string {
   }
 
   return serialized.length > 240 ? `${serialized.slice(0, 237)}...` : serialized;
+}
+
+function normalizeToolName(name: string):
+  | "apply_patch"
+  | "list_files"
+  | "read_file"
+  | "run_shell"
+    | "search_files"
+    | "write_plan" {
+  return name as
+    | "apply_patch"
+    | "list_files"
+    | "read_file"
+    | "run_shell"
+    | "search_files"
+    | "write_plan";
+}
+
+function toObservationToolName(name: string): Observation["tool"] | null {
+  if (name === "write_plan") {
+    return null;
+  }
+
+  return name as Observation["tool"];
 }
 
 function buildResumePrompt(session: SessionRecord): string {

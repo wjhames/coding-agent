@@ -226,6 +226,45 @@ describe("runCli", () => {
     });
   });
 
+  it("recovers from a tool error instead of failing the session", async () => {
+    const cwd = await makeWorkspace();
+    const homeDir = await makeHomeDir();
+    await writeHomeConfig(homeDir);
+    await mkdir(join(cwd, ".notes"));
+    const io = createMemoryIo();
+    const fetchImpl = createSequenceFetch([
+      toolResponse([
+        {
+          id: "call-1",
+          name: "read_file",
+          arguments: {
+            path: ".notes"
+          }
+        }
+      ]),
+      finalResponse("Recovered after bad tool call and continued the task.")
+    ]);
+
+    const exitCode = await runCli(
+      ["exec", "inspect repo", "--json", "--cwd", cwd],
+      io.streams,
+      {
+        fetchImpl,
+        sessionHomeDir: homeDir
+      }
+    );
+
+    expect(exitCode).toBe(0);
+    const payload = JSON.parse(io.stdout);
+    expect(payload.status).toBe("completed");
+    expect(payload.summary).toContain("Recovered after bad tool call");
+    expect(payload.observations).toContainEqual({
+      excerpt: "Requested path is not a file: `.notes`.",
+      summary: "Tool error from read_file: Requested path is not a file: `.notes`.",
+      tool: "read_file"
+    });
+  });
+
   it("pauses on apply_patch under prompt policy and resumes with auto approval", async () => {
     const cwd = await makeWorkspace();
     const homeDir = await makeHomeDir();
