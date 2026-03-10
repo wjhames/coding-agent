@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { applyCommandResult, applyRuntimeEvent, createInitialInteractiveState } from "../../src/interactive/state.js";
 
 describe("interactive state", () => {
-  it("tracks runtime events into transcript and side state", () => {
+  it("tracks runtime events into transcript and current plan", () => {
     let state = createInitialInteractiveState({
       cwd: "/workspace/project",
       doctor: null,
@@ -33,7 +33,7 @@ describe("interactive state", () => {
     expect(state.runtimeStatus).toBe("reading");
     expect(state.plan?.summary).toBe("Inspect the repo");
     expect(state.transcript.at(-1)?.kind).toBe("plan");
-    expect(state.selectedSidebarSection).toBe("plan");
+    expect(state.selectedTranscriptIndex).toBe(state.transcript.length - 1);
   });
 
   it("switches into approval mode from a paused result", () => {

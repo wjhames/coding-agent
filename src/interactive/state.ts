@@ -35,7 +35,6 @@ export interface InteractiveState {
   detailScroll: number;
   doctor: RuntimeDoctor | null;
   footerMessage: string | null;
-  focus: "input" | "sidebar" | "transcript";
   input: string;
   mode: "approval" | "details" | "home" | "running";
   pendingApproval: PendingApprovalInfo | null;
@@ -53,10 +52,10 @@ export interface InteractiveState {
     | "resuming"
     | "verifying";
   selectedSessionIndex: number;
-  selectedSidebarSection: "approval" | "plan" | "sessions" | "verification" | "working";
   selectedTranscriptIndex: number;
   sessionId: string | null;
   transcript: TranscriptEntry[];
+  transcriptScroll: number;
   verification: VerificationSummary | null;
 }
 
@@ -74,7 +73,6 @@ export function createInitialInteractiveState(args: {
     detailScroll: 0,
     doctor: args.doctor,
     footerMessage: null,
-    focus: "input",
     input: "",
     mode: "home",
     pendingApproval: null,
@@ -83,7 +81,6 @@ export function createInitialInteractiveState(args: {
     recentSessions: args.recentSessions,
     runtimeStatus: "idle",
     selectedSessionIndex: 0,
-    selectedSidebarSection: "sessions",
     selectedTranscriptIndex: 0,
     sessionId: null,
     transcript: [
@@ -97,6 +94,7 @@ export function createInitialInteractiveState(args: {
         title: "Welcome"
       }
     ],
+    transcriptScroll: 0,
     verification: null
   };
 }
@@ -121,7 +119,6 @@ export function applyRuntimeEvent(state: InteractiveState, event: RuntimeEvent):
       return {
         ...state,
         plan: event.plan,
-        selectedSidebarSection: "plan",
         ...withTranscriptEntry(state, {
           body: event.plan
             ? event.plan.items.map((item) => `[${item.status}] ${item.content}`).join("\n")
@@ -148,16 +145,14 @@ export function applyRuntimeEvent(state: InteractiveState, event: RuntimeEvent):
         event.error,
         event.artifacts?.map((artifact) => artifact.diff).join("\n\n")
       ].filter(Boolean);
-        return {
-          ...state,
-          artifacts: event.artifacts ? mergeArtifacts(state.artifacts, event.artifacts) : state.artifacts,
-          changedFiles: event.changedFiles ? [...new Set([...state.changedFiles, ...event.changedFiles])].sort() : state.changedFiles,
-          selectedSidebarSection:
-            event.changedFiles && event.changedFiles.length > 0 ? "working" : state.selectedSidebarSection,
-          ...withTranscriptEntry(state, {
-            body:
-              event.error ??
-              event.observation?.summary ??
+      return {
+        ...state,
+        artifacts: event.artifacts ? mergeArtifacts(state.artifacts, event.artifacts) : state.artifacts,
+        changedFiles: event.changedFiles ? [...new Set([...state.changedFiles, ...event.changedFiles])].sort() : state.changedFiles,
+        ...withTranscriptEntry(state, {
+          body:
+            event.error ??
+            event.observation?.summary ??
             (event.changedFiles && event.changedFiles.length > 0
               ? `Changed: ${event.changedFiles.join(", ")}`
               : "Completed."),
@@ -172,11 +167,9 @@ export function applyRuntimeEvent(state: InteractiveState, event: RuntimeEvent):
       return {
         ...state,
         approvalChoiceIndex: 0,
-        focus: "sidebar",
         mode: "approval",
         pendingApproval: toPendingApproval(event.approval, event.pendingAction),
         runtimeStatus: "paused",
-        selectedSidebarSection: "approval",
         ...withTranscriptEntry(state, {
           body: event.approval.summary,
           detail: JSON.stringify(event.pendingAction, null, 2),
@@ -201,7 +194,6 @@ export function applyRuntimeEvent(state: InteractiveState, event: RuntimeEvent):
       return {
         ...state,
         runtimeStatus: "verifying",
-        selectedSidebarSection: "verification",
         ...withTranscriptEntry(state, {
           body: event.commands.join("\n"),
           detail: event.commands.join("\n"),
@@ -213,7 +205,6 @@ export function applyRuntimeEvent(state: InteractiveState, event: RuntimeEvent):
     case "verification_completed":
       return {
         ...state,
-        selectedSidebarSection: "verification",
         verification: event.verification,
         ...withTranscriptEntry(state, {
           body: formatVerificationSummary(event.verification),
@@ -258,6 +249,7 @@ export function applyCommandResult(state: InteractiveState, result: CommandResul
     runtimeStatus:
       result.status === "paused" ? "paused" : result.status === "failed" ? "failed" : "completed",
     sessionId: result.sessionId,
+    transcriptScroll: 0,
     verification: result.verification
   };
 }
@@ -272,11 +264,12 @@ export function appendTranscript(
 function withTranscriptEntry(
   state: InteractiveState,
   entry: TranscriptEntry
-): Pick<InteractiveState, "selectedTranscriptIndex" | "transcript"> {
+): Pick<InteractiveState, "selectedTranscriptIndex" | "transcript" | "transcriptScroll"> {
   const transcript = appendTranscript(state.transcript, entry);
   return {
     selectedTranscriptIndex: transcript.length - 1,
-    transcript
+    transcript,
+    transcriptScroll: 0
   };
 }
 

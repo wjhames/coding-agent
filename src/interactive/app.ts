@@ -1,6 +1,5 @@
 import process from "node:process";
 import readline from "node:readline";
-import { setTimeout as delay } from "node:timers/promises";
 import { approveTask, listSessions, resumeTask, runDoctor, startTask } from "../runtime/api.js";
 import type { RuntimeDoctor, RuntimeEnvironment } from "../runtime/api.js";
 import type { CliIO, RuntimeEvent } from "../cli/output.js";
@@ -59,29 +58,6 @@ export async function runInteractiveApp(args: {
     render();
   };
 
-  const animateAssistant = async (text: string) => {
-    const entry = state.transcript.at(-1);
-    if (!entry || entry.kind !== "assistant" || entry.body !== text) {
-      return;
-    }
-
-    for (let index = 0; index < text.length; index += 16) {
-      const visible = text.slice(0, index + 16);
-      state = {
-        ...state,
-        transcript: [
-          ...state.transcript.slice(0, -1),
-          {
-            ...entry,
-            body: visible
-          }
-        ]
-      };
-      render();
-      await delay(8);
-    }
-  };
-
   const refreshRecentSessions = async () => {
     state = {
       ...state,
@@ -105,9 +81,6 @@ export async function runInteractiveApp(args: {
 
     state = applyCommandResult(state, result);
     render();
-    if (result.status !== "paused") {
-      await animateAssistant(result.summary);
-    }
     await refreshRecentSessions();
     render();
   };
@@ -144,10 +117,10 @@ export async function runInteractiveApp(args: {
         pendingApproval: null,
         plan: null,
         runtimeStatus: "planning",
-        selectedSidebarSection: "plan",
-        selectedTranscriptIndex: 0,
         sessionId: null,
+        selectedTranscriptIndex: state.transcript.length,
         transcript: [
+          ...state.transcript,
           {
             body: prompt,
             id: `user:${Date.now()}`,
@@ -155,6 +128,7 @@ export async function runInteractiveApp(args: {
             title: "You"
           }
         ],
+        transcriptScroll: 0,
         verification: null
       };
       render();
@@ -185,15 +159,16 @@ export async function runInteractiveApp(args: {
 
     state = {
       ...state,
-      footerMessage: mode === "approve" ? "Applying approval..." : `Resuming ${selectedSession.id}...`,
-      mode: "running",
-      runtimeStatus: mode === "approve" ? "resuming" : "resuming",
-      sessionId: selectedSession.id,
-      transcript:
-        mode === "resume"
+        footerMessage: mode === "approve" ? "Applying approval..." : `Resuming latest session...`,
+        mode: "running",
+        runtimeStatus: mode === "approve" ? "resuming" : "resuming",
+        sessionId: selectedSession.id,
+        transcript:
+          mode === "resume"
           ? [
+              ...state.transcript,
               {
-                body: `Resuming session ${selectedSession.id}`,
+                body: `Resuming ${selectedSession.id.slice(0, 8)}...`,
                 detail: selectedSession.summary,
                 id: `resume:${Date.now()}`,
                 kind: "system",
@@ -238,6 +213,7 @@ export async function runInteractiveApp(args: {
   };
 
   let resolveExit: ((code: number) => void) | null = null;
+  let cleanedUp = false;
 
   const onKeypress = async (_input: string | undefined, key: readline.Key) => {
     if (key.ctrl && key.name === "c") {
@@ -247,13 +223,6 @@ export async function runInteractiveApp(args: {
     }
 
     if (state.mode === "running") {
-      if (key.name === "q") {
-        state = {
-          ...state,
-          footerMessage: "Current run cannot be interrupted yet. Wait for pause or completion."
-        };
-        render();
-      }
       return;
     }
 
@@ -302,7 +271,6 @@ export async function runInteractiveApp(args: {
       typeof _input === "string" &&
       _input.length === 1 &&
       !_input.startsWith("\u001b") &&
-      state.focus === "input" &&
       !key.ctrl &&
       !key.meta &&
       key.name !== "return" &&
@@ -321,37 +289,6 @@ export async function runInteractiveApp(args: {
       return;
     }
 
-    if (key.name === "tab") {
-      state = {
-        ...state,
-        focus:
-          state.focus === "input"
-            ? "transcript"
-            : state.focus === "transcript"
-              ? "sidebar"
-              : "input"
-      };
-      render();
-      return;
-    }
-
-    if (key.name === "q") {
-      cleanup();
-      resolveExit?.(0);
-      return;
-    }
-
-    if (key.name === "a" || key.name === "p" || key.name === "v") {
-      state = {
-        ...state,
-        focus: "sidebar",
-        selectedSidebarSection:
-          key.name === "a" ? "approval" : key.name === "p" ? "plan" : "verification"
-      };
-      render();
-      return;
-    }
-
     if (key.name === "d") {
       state = {
         ...state,
@@ -361,61 +298,27 @@ export async function runInteractiveApp(args: {
       return;
     }
 
-    if (state.focus === "transcript" && (key.name === "up" || key.name === "down")) {
+    if (key.name === "up" || key.name === "down") {
       state = {
         ...state,
         selectedTranscriptIndex: clamp(
           state.selectedTranscriptIndex + (key.name === "up" ? -1 : 1),
           0,
           Math.max(0, state.transcript.length - 1)
-        )
-      };
-      render();
-      return;
-    }
-
-    if (state.focus === "sidebar" && (key.name === "up" || key.name === "down")) {
-      const sections: InteractiveState["selectedSidebarSection"][] = [
-        "plan",
-        "working",
-        "verification",
-        "approval",
-        "sessions"
-      ];
-      const currentIndex = sections.indexOf(state.selectedSidebarSection);
-      const nextIndex = clamp(
-        currentIndex + (key.name === "up" ? -1 : 1),
-        0,
-        sections.length - 1
-      );
-      state = {
-        ...state,
-        selectedSidebarSection: sections[nextIndex]!
-      };
-      render();
-      return;
-    }
-
-    if (state.focus === "input" && state.input.length === 0 && (key.name === "up" || key.name === "down")) {
-      state = {
-        ...state,
-        selectedSessionIndex: clamp(
-          state.selectedSessionIndex + (key.name === "up" ? -1 : 1),
-          0,
-          Math.max(0, state.recentSessions.length - 1)
-        )
+        ),
+        transcriptScroll: clamp(state.transcriptScroll + (key.name === "up" ? 1 : -1), 0, 10_000)
       };
       render();
       return;
     }
 
     if (key.name === "return") {
-      if (state.focus === "input" && state.input.trim().length > 0) {
+      if (state.input.trim().length > 0) {
         await startRun("start");
         return;
       }
 
-      if (state.focus === "input" && state.input.trim().length === 0 && state.recentSessions.length > 0) {
+      if (state.input.trim().length === 0 && state.recentSessions.length > 0) {
         await startRun("resume");
         return;
       }
@@ -434,6 +337,7 @@ export async function runInteractiveApp(args: {
     if (key.name === "escape") {
       state = {
         ...state,
+        detailScroll: 0,
         footerMessage: null,
         input: ""
       };
@@ -444,9 +348,16 @@ export async function runInteractiveApp(args: {
   };
 
   const cleanup = () => {
+    if (cleanedUp) {
+      return;
+    }
+    cleanedUp = true;
     stdin.off("keypress", onKeypress);
     stdin.setRawMode(false);
     stdout.write("\x1b[?25h\x1b[?1049l");
+    if (state.sessionId) {
+      stdout.write(`Last session: ${state.sessionId} (${state.runtimeStatus})\n`);
+    }
   };
 
   stdin.on("keypress", onKeypress);
