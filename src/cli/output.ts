@@ -55,10 +55,47 @@ export interface VerificationSummary {
   runs: VerificationRun[];
 }
 
+export interface GuidanceSource {
+  path: string;
+  priority: number;
+  source: "home" | "repo" | "task";
+}
+
+export interface GuidanceSummary {
+  activeRules: string[];
+  sources: GuidanceSource[];
+}
+
+export interface MemoryEntry {
+  createdAt: string;
+  evidence: string[];
+  kind: "artifact" | "decision" | "working";
+  relevance: "high" | "medium" | "low";
+  summary: string;
+}
+
+export interface MemorySummary {
+  artifacts: MemoryEntry[];
+  decisions: MemoryEntry[];
+  working: MemoryEntry[];
+}
+
+export interface CompactionSummary {
+  changedFilesSummary: string | null;
+  eventSummary: string | null;
+  observationSummary: string | null;
+  verificationSummary: string | null;
+}
+
 export interface CommandResult {
   approvals: Approval[];
   artifacts: Artifact[];
   changedFiles: string[];
+  compaction: CompactionSummary;
+  eventCount: number;
+  guidance: GuidanceSummary;
+  lastEventAt: string | null;
+  memory: MemorySummary;
   verification: VerificationSummary;
   exitCode: 0 | 1 | 2;
   nextActions: string[];

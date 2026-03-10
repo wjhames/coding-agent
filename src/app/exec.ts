@@ -3,6 +3,9 @@ import type {
   Approval,
   Artifact,
   CommandResult,
+  CompactionSummary,
+  GuidanceSummary,
+  MemorySummary,
   Observation,
   PlanState,
   RepoContextSummary,
@@ -22,8 +25,26 @@ import {
 import type { ParsedOptions } from "../cli/parse.js";
 import { createOpenAICompatibleClient } from "../llm/openai.js";
 import { LlmError } from "../llm/openai.js";
+import type { LlmTool } from "../llm/openai.js";
 import type { SessionRecord } from "../session/store.js";
 import { createSession, updateSession } from "../session/store.js";
+import {
+  createApprovalRequestedEvent,
+  createApprovalResolvedEvent,
+  createCompactionUpdatedEvent,
+  createMemoryUpdatedEvent,
+  createPlanUpdatedEvent,
+  createSessionCompletedEvent,
+  createSessionFailedEvent,
+  createSessionPausedEvent,
+  createSessionStartedEvent,
+  createSummaryUpdatedEvent,
+  createToolCalledEvent,
+  createToolResultRecordedEvent,
+  createVerificationCompletedEvent,
+  createVerificationStartedEvent,
+  type SessionEvent
+} from "../session/events.js";
 import { createApplyPatchTool, applyPatchOperations } from "../tools/apply-patch.js";
 import { createListFilesTool } from "../tools/list-files.js";
 import { createReadFileTool } from "../tools/read-file.js";
@@ -35,6 +56,10 @@ interface RuntimeState {
   approvals: Approval[];
   artifacts: Artifact[];
   changedFiles: Set<string>;
+  compaction: CompactionSummary;
+  events: SessionEvent[];
+  guidance: GuidanceSummary;
+  memory: MemorySummary;
   observations: Observation[];
   pendingAction: PendingAction | null;
   plan: PlanState | null;
@@ -80,6 +105,10 @@ export async function continueExec(args: {
   }
 
   if (resolvedConfig.approvalPolicy === "never") {
+    const rejectionEvent = createApprovalResolvedEvent({
+      approvalId: args.session.pendingAction.approval.id,
+      status: "rejected"
+    });
     const rejectedApprovals = args.session.approvals.map((approval) =>
       approval.id === args.session.pendingAction?.approval.id
         ? { ...approval, status: "rejected" as const }
@@ -91,8 +120,14 @@ export async function continueExec(args: {
         approvals: rejectedApprovals,
         artifacts: args.session.artifacts,
         changedFiles: args.session.changedFiles,
+        compaction: args.session.compaction,
         config: args.session.config,
         cwd: args.session.cwd,
+        eventCount: args.session.eventCount,
+        events: [rejectionEvent],
+        guidance: args.session.guidance,
+        lastEventAt: rejectionEvent.at,
+        memory: args.session.memory,
         mode: args.session.mode,
         nextActions: args.session.nextActions,
         observations: args.session.observations,
@@ -123,10 +158,10 @@ export async function continueExec(args: {
     fetchImpl: args.fetchImpl,
     options: args.options,
     prompt: buildResumePrompt(args.session),
-    sessionHomeDir: args.sessionHomeDir,
-    state
-  });
-}
+      sessionHomeDir: args.sessionHomeDir,
+      state
+    });
+  }
 
 async function executeTask(args: {
   cwd: string;
@@ -157,6 +192,21 @@ async function executeTask(args: {
       approvals: [],
       artifacts: [],
       changedFiles: [],
+      compaction: {
+        changedFilesSummary: null,
+        eventSummary: null,
+        observationSummary: null,
+        verificationSummary: null
+      },
+      guidance: {
+        activeRules: [],
+        sources: []
+      },
+      memory: {
+        artifacts: [],
+        decisions: [],
+        working: []
+      },
       observations: [],
       pendingAction: null,
       plan: null,
@@ -192,10 +242,12 @@ async function executeTask(args: {
     let summary = initialSummary;
 
     if (state.changedFiles.size > 0 && verificationCommands.length > 0) {
+      state.events.push(createVerificationStartedEvent(verificationCommands));
       state.verification = await runVerificationCommands({
         commands: verificationCommands,
         cwd: args.cwd
       });
+      state.events.push(createVerificationCompletedEvent(state.verification));
       appendVerificationObservations(state);
 
       if (!state.verification.passed) {
@@ -211,10 +263,12 @@ async function executeTask(args: {
           state,
           verificationCommands
         });
+        state.events.push(createVerificationStartedEvent(verificationCommands));
         state.verification = await runVerificationCommands({
           commands: verificationCommands,
           cwd: args.cwd
         });
+        state.events.push(createVerificationCompletedEvent(state.verification));
         appendVerificationObservations(state);
       }
     } else {
@@ -228,6 +282,32 @@ async function executeTask(args: {
 
     const nextActions = deriveNextActions(state.plan);
     const status = state.verification.passed ? "completed" : "failed";
+    const finalSummary = buildFinalSummary(summary, state.verification);
+    state.events.push(
+      createSummaryUpdatedEvent({
+        nextActions,
+        summary: finalSummary
+      })
+    );
+    state.events.push(
+      status === "completed"
+        ? createSessionCompletedEvent({
+            approvals: state.approvals,
+            artifacts: state.artifacts,
+            changedFiles: [...state.changedFiles],
+            pendingAction: null,
+            summary: finalSummary,
+            verification: state.verification
+          })
+        : createSessionFailedEvent({
+            approvals: state.approvals,
+            artifacts: state.artifacts,
+            changedFiles: [...state.changedFiles],
+            pendingAction: null,
+            summary: finalSummary,
+            verification: state.verification
+          })
+    );
     const persisted = await persistSession({
       existingSession: args.existingSession,
       sessionHomeDir: args.sessionHomeDir,
@@ -235,8 +315,12 @@ async function executeTask(args: {
         approvals: state.approvals,
         artifacts: state.artifacts,
         changedFiles: [...state.changedFiles],
+        compaction: state.compaction,
         config: resolvedConfig,
         cwd: args.cwd,
+        events: state.events,
+        guidance: state.guidance,
+        memory: state.memory,
         mode: "exec",
         nextActions,
         observations: state.observations,
@@ -245,7 +329,7 @@ async function executeTask(args: {
         prompt: args.prompt,
         repoContext: repoContextSummary,
         status,
-        summary: buildFinalSummary(summary, state.verification),
+        summary: finalSummary,
         verification: state.verification
       }
     });
@@ -255,6 +339,28 @@ async function executeTask(args: {
     if (error instanceof ApprovalRequiredError) {
       state.pendingAction = error.action;
       state.approvals = upsertApproval(state.approvals, error.approval);
+      state.events.push(
+        createApprovalRequestedEvent({
+          approval: error.approval,
+          pendingAction: error.action
+        })
+      );
+      state.events.push(
+        createSummaryUpdatedEvent({
+          nextActions: deriveNextActions(state.plan),
+          summary: error.approval.summary
+        })
+      );
+      state.events.push(
+        createSessionPausedEvent({
+          approvals: state.approvals,
+          artifacts: state.artifacts,
+          changedFiles: [...state.changedFiles],
+          pendingAction: state.pendingAction,
+          summary: error.approval.summary,
+          verification: state.verification
+        })
+      );
       const pausedSession = await persistSession({
         existingSession: args.existingSession,
         sessionHomeDir: args.sessionHomeDir,
@@ -262,8 +368,12 @@ async function executeTask(args: {
           approvals: state.approvals,
           artifacts: state.artifacts,
           changedFiles: [...state.changedFiles],
+          compaction: state.compaction,
           config: resolvedConfig,
           cwd: args.cwd,
+          events: state.events,
+          guidance: state.guidance,
+          memory: state.memory,
           mode: "exec",
           nextActions: deriveNextActions(state.plan),
           observations: state.observations,
@@ -288,8 +398,26 @@ async function executeTask(args: {
           approvals: state.approvals,
           artifacts: state.artifacts,
           changedFiles: [...state.changedFiles],
+          compaction: state.compaction,
           config: resolvedConfig,
           cwd: args.cwd,
+          events: [
+            ...state.events,
+            createSummaryUpdatedEvent({
+              nextActions: deriveNextActions(state.plan),
+              summary: error.message
+            }),
+            createSessionFailedEvent({
+              approvals: state.approvals,
+              artifacts: state.artifacts,
+              changedFiles: [...state.changedFiles],
+              pendingAction: null,
+              summary: error.message,
+              verification: state.verification
+            })
+          ],
+          guidance: state.guidance,
+          memory: state.memory,
           mode: "exec",
           nextActions: deriveNextActions(state.plan),
           observations: state.observations,
@@ -319,72 +447,16 @@ async function runModelLoop(args: {
   state: RuntimeState;
   verificationCommands: string[];
 }): Promise<string> {
+  const tools = createRuntimeTools({
+    config: args.config,
+    cwd: args.cwd,
+    state: args.state,
+    verificationCommands: args.verificationCommands
+  });
   const toolResult = await args.client.runTools({
     maxRounds: args.config.maxSteps ?? 8,
     systemPrompt: buildSystemPrompt(args.config),
-    tools: [
-      createWritePlanTool({
-        getPlan: () => args.state.plan,
-        setPlan: (nextPlan) => {
-          args.state.plan = nextPlan;
-        }
-      }),
-      createListFilesTool({
-        cwd: args.cwd,
-        observe: (observation) => {
-          args.state.observations.push(observation);
-        }
-      }),
-      createSearchFilesTool({
-        cwd: args.cwd,
-        observe: (observation) => {
-          args.state.observations.push(observation);
-        }
-      }),
-      createReadFileTool({
-        cwd: args.cwd,
-        observe: (observation) => {
-          args.state.observations.push(observation);
-        }
-      }),
-      createApplyPatchTool({
-        addApproval: (approval) => {
-          args.state.approvals = upsertApproval(args.state.approvals, approval);
-        },
-        addArtifacts: (artifacts) => {
-          args.state.artifacts = upsertArtifacts(args.state.artifacts, artifacts);
-        },
-        addChangedFiles: (files) => {
-          for (const file of files) {
-            args.state.changedFiles.add(file);
-          }
-        },
-        addObservation: (observation) => {
-          args.state.observations.push(observation);
-        },
-        config: args.config,
-        cwd: args.cwd
-      }),
-      createRunShellTool({
-        addApproval: (approval) => {
-          args.state.approvals = upsertApproval(args.state.approvals, approval);
-        },
-        addArtifacts: (artifacts) => {
-          args.state.artifacts = upsertArtifacts(args.state.artifacts, artifacts);
-        },
-        addChangedFiles: (files) => {
-          for (const file of files) {
-            args.state.changedFiles.add(file);
-          }
-        },
-        addObservation: (observation) => {
-          args.state.observations.push(observation);
-        },
-        config: args.config,
-        cwd: args.cwd,
-        verificationCommands: args.verificationCommands
-      })
-    ],
+    tools,
     userPrompt: buildUserPrompt({
       cwd: args.cwd,
       prompt: args.prompt,
@@ -397,6 +469,132 @@ async function runModelLoop(args: {
   return toolResult.text;
 }
 
+function createRuntimeTools(args: {
+  config: ResolvedExecutionConfig;
+  cwd: string;
+  state: RuntimeState;
+  verificationCommands: string[];
+}): LlmTool[] {
+  return [
+    createWritePlanTool({
+      getPlan: () => args.state.plan,
+      setPlan: (nextPlan) => {
+        args.state.plan = nextPlan;
+        args.state.events.push(createPlanUpdatedEvent(nextPlan));
+      }
+    }),
+    createListFilesTool({
+      cwd: args.cwd,
+      observe: (observation) => {
+        args.state.observations.push(observation);
+      }
+    }),
+    createSearchFilesTool({
+      cwd: args.cwd,
+      observe: (observation) => {
+        args.state.observations.push(observation);
+      }
+    }),
+    createReadFileTool({
+      cwd: args.cwd,
+      observe: (observation) => {
+        args.state.observations.push(observation);
+      }
+    }),
+    createApplyPatchTool({
+      addApproval: (approval) => {
+        args.state.approvals = upsertApproval(args.state.approvals, approval);
+      },
+      addArtifacts: (artifacts) => {
+        args.state.artifacts = upsertArtifacts(args.state.artifacts, artifacts);
+      },
+      addChangedFiles: (files) => {
+        for (const file of files) {
+          args.state.changedFiles.add(file);
+        }
+      },
+      addObservation: (observation) => {
+        args.state.observations.push(observation);
+      },
+      config: args.config,
+      cwd: args.cwd
+    }),
+    createRunShellTool({
+      addApproval: (approval) => {
+        args.state.approvals = upsertApproval(args.state.approvals, approval);
+      },
+      addArtifacts: (artifacts) => {
+        args.state.artifacts = upsertArtifacts(args.state.artifacts, artifacts);
+      },
+      addChangedFiles: (files) => {
+        for (const file of files) {
+          args.state.changedFiles.add(file);
+        }
+      },
+      addObservation: (observation) => {
+        args.state.observations.push(observation);
+      },
+      config: args.config,
+      cwd: args.cwd,
+      verificationCommands: args.verificationCommands
+    })
+  ].map((tool) =>
+    wrapToolWithEvents({
+      state: args.state,
+      tool
+    })
+  );
+}
+
+function wrapToolWithEvents(args: {
+  state: RuntimeState;
+  tool: LlmTool;
+}): LlmTool {
+  return {
+    ...args.tool,
+    async run(input) {
+      args.state.events.push(
+        createToolCalledEvent({
+          inputSummary: summarizeToolInput(input),
+          tool: args.tool.name as
+            | "apply_patch"
+            | "list_files"
+            | "read_file"
+            | "run_shell"
+            | "search_files"
+            | "write_plan"
+        })
+      );
+      const beforeObservationCount = args.state.observations.length;
+      const beforeArtifactCount = args.state.artifacts.length;
+      const beforeChangedFiles = new Set(args.state.changedFiles);
+      const result = await args.tool.run(input);
+      const latestObservation = args.state.observations.at(-1);
+      const newArtifacts = args.state.artifacts.slice(beforeArtifactCount);
+      const newChangedFiles = [...args.state.changedFiles].filter(
+        (path) => !beforeChangedFiles.has(path)
+      );
+      args.state.events.push(
+        createToolResultRecordedEvent({
+          ...(args.state.observations.length > beforeObservationCount && latestObservation
+            ? { observation: latestObservation }
+            : {}),
+          ...(newArtifacts.length > 0 ? { artifacts: newArtifacts } : {}),
+          ...(newChangedFiles.length > 0 ? { changedFiles: newChangedFiles } : {}),
+          tool: args.tool.name as
+            | "apply_patch"
+            | "list_files"
+            | "read_file"
+            | "run_shell"
+            | "search_files"
+            | "write_plan"
+        })
+      );
+      return result;
+    }
+  };
+}
+
 async function executePendingAction(args: {
   config: ResolvedExecutionConfig;
   cwd: string;
@@ -407,6 +605,12 @@ async function executePendingAction(args: {
   }
 
   const approvalId = args.state.pendingAction.approval.id;
+  args.state.events.push(
+    createApprovalResolvedEvent({
+      approvalId,
+      status: "approved"
+    })
+  );
   args.state.approvals = args.state.approvals.map((approval) =>
     approval.id === approvalId ? { ...approval, status: "approved" as const } : approval
   );
@@ -452,6 +656,9 @@ function createRuntimeState(source: {
   approvals: Approval[];
   artifacts: Artifact[];
   changedFiles: string[];
+  compaction: CompactionSummary;
+  guidance: GuidanceSummary;
+  memory: MemorySummary;
   observations: Observation[];
   pendingAction: PendingAction | null;
   plan: PlanState | null;
@@ -462,6 +669,10 @@ function createRuntimeState(source: {
     approvals: source.approvals,
     artifacts: source.artifacts,
     changedFiles: new Set(source.changedFiles),
+    compaction: source.compaction,
+    events: [],
+    guidance: source.guidance,
+    memory: source.memory,
     observations: source.observations,
     pendingAction: source.pendingAction,
     plan: source.plan,
@@ -533,6 +744,16 @@ function buildSystemPrompt(config: ResolvedExecutionConfig): string {
   ].join(" ");
 }
 
+function summarizeToolInput(input: unknown): string {
+  const serialized = JSON.stringify(input);
+
+  if (!serialized) {
+    return "";
+  }
+
+  return serialized.length > 240 ? `${serialized.slice(0, 237)}...` : serialized;
+}
+
 function buildResumePrompt(session: SessionRecord): string {
   return [
     session.prompt,
@@ -586,8 +807,12 @@ async function persistSession(args: {
     approvals: Approval[];
     artifacts: Artifact[];
     changedFiles: string[];
+    compaction: CompactionSummary;
     config: ResolvedExecutionConfig;
     cwd: string;
+    events: SessionEvent[];
+    guidance: GuidanceSummary;
+    memory: MemorySummary;
     mode: "exec";
     nextActions: string[];
     observations: Observation[];

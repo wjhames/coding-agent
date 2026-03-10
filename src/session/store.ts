@@ -5,11 +5,25 @@ import { z } from "zod";
 import type {
   Approval,
   Artifact,
+  CompactionSummary,
+  GuidanceSummary,
+  MemorySummary,
   Observation,
   PlanState,
   RepoContextSummary,
   VerificationSummary
 } from "../cli/output.js";
+import {
+  appendSessionEvents,
+  createSessionCompletedEvent,
+  createSessionFailedEvent,
+  createSessionPausedEvent,
+  createSessionStartedEvent,
+  createSummaryUpdatedEvent,
+  loadSessionEvents,
+  reduceSessionEvents,
+  type SessionEvent
+} from "./events.js";
 import { ensureSessionRoot, getSessionFilePath, getSessionRoot } from "./paths.js";
 
 export const sessionStatusSchema = z.enum(["completed", "failed", "paused"]);
@@ -92,12 +106,40 @@ const verificationSchema = z.object({
     })
   )
 });
+const guidanceSourceSchema = z.object({
+  path: z.string(),
+  priority: z.number().int(),
+  source: z.enum(["home", "repo", "task"])
+});
+const guidanceSummarySchema = z.object({
+  activeRules: z.array(z.string()),
+  sources: z.array(guidanceSourceSchema)
+});
+const memoryEntrySchema = z.object({
+  createdAt: z.string(),
+  evidence: z.array(z.string()),
+  kind: z.enum(["artifact", "decision", "working"]),
+  relevance: z.enum(["high", "medium", "low"]),
+  summary: z.string()
+});
+const memorySummarySchema = z.object({
+  artifacts: z.array(memoryEntrySchema),
+  decisions: z.array(memoryEntrySchema),
+  working: z.array(memoryEntrySchema)
+});
+const compactionSummarySchema = z.object({
+  changedFilesSummary: z.string().nullable(),
+  eventSummary: z.string().nullable(),
+  observationSummary: z.string().nullable(),
+  verificationSummary: z.string().nullable()
+});
 
 export const sessionRecordSchema = z
   .object({
     approvals: z.array(approvalSchema),
     artifacts: z.array(artifactSchema),
     changedFiles: z.array(z.string()),
+    compaction: compactionSummarySchema,
     config: z
       .object({
         approvalPolicy: z.enum(["auto", "prompt", "never"]).optional(),
@@ -111,7 +153,11 @@ export const sessionRecordSchema = z
       .strict(),
     createdAt: z.string(),
     cwd: z.string(),
+    eventCount: z.number().int().nonnegative(),
+    guidance: guidanceSummarySchema,
     id: z.string(),
+    lastEventAt: z.string().nullable(),
+    memory: memorySummarySchema,
     mode: sessionModeSchema,
     nextActions: z.array(z.string()),
     observations: z.array(observationSchema),
@@ -134,9 +180,14 @@ export interface CreateSessionInput {
   approvals?: Approval[];
   artifacts?: Artifact[];
   changedFiles?: string[];
+  compaction?: CompactionSummary;
   config: SessionRecord["config"];
   cwd: string;
+  eventCount?: number;
+  guidance?: GuidanceSummary;
   mode: SessionMode;
+  lastEventAt?: string | null;
+  memory?: MemorySummary;
   nextActions?: string[];
   observations?: Observation[];
   pendingAction?: SessionRecord["pendingAction"];
@@ -146,6 +197,7 @@ export interface CreateSessionInput {
   status: SessionStatus;
   summary: string;
   verification?: VerificationSummary;
+  events?: SessionEvent[];
 }
 
 export class SessionStoreError extends Error {}
@@ -155,14 +207,32 @@ export async function createSession(
   homeDir?: string
 ): Promise<SessionRecord> {
   const now = new Date().toISOString();
+  const sessionId = randomUUID();
   const session: SessionRecord = {
     approvals: input.approvals ?? [],
     artifacts: input.artifacts ?? [],
     changedFiles: input.changedFiles ?? [],
+    compaction: input.compaction ?? {
+      changedFilesSummary: null,
+      eventSummary: null,
+      observationSummary: null,
+      verificationSummary: null
+    },
     config: input.config,
     createdAt: now,
     cwd: input.cwd,
-    id: randomUUID(),
+    eventCount: input.eventCount ?? 0,
+    guidance: input.guidance ?? {
+      activeRules: [],
+      sources: []
+    },
+    id: sessionId,
+    lastEventAt: input.lastEventAt ?? null,
+    memory: input.memory ?? {
+      artifacts: [],
+      decisions: [],
+      working: []
+    },
     mode: input.mode,
     nextActions: input.nextActions ?? [],
     observations: input.observations ?? [],
@@ -181,8 +251,41 @@ export async function createSession(
     }
   };
 
-  await saveSession(session, homeDir);
-  return session;
+  const events =
+    input.events === undefined
+      ? defaultEventsForSession({
+          id: sessionId,
+          input,
+          session
+        })
+      : input.events.some((event) => event.type === "session_started")
+        ? input.events
+        : [
+            createSessionStartedEvent({
+              config: input.config,
+              cwd: input.cwd,
+              guidance: session.guidance,
+              id: sessionId,
+              mode: input.mode,
+              prompt: input.prompt,
+              repoContext: input.repoContext
+            }),
+            ...input.events
+          ];
+  const reduced = reduceSessionEvents(events);
+
+  if (!reduced) {
+    throw new SessionStoreError("Failed to reduce session events.");
+  }
+
+  const persisted = {
+    ...session,
+    ...reduced
+  };
+
+  await appendSessionEvents(persisted.id, events, homeDir);
+  await saveSession(persisted, homeDir);
+  return persisted;
 }
 
 export async function updateSession(
@@ -208,8 +311,13 @@ export async function updateSession(
     approvals: input.approvals ?? existing.approvals,
     artifacts: input.artifacts ?? existing.artifacts,
     changedFiles: input.changedFiles ?? existing.changedFiles,
+    compaction: input.compaction ?? existing.compaction,
     config: input.config,
     cwd: input.cwd,
+    eventCount: input.eventCount ?? existing.eventCount,
+    guidance: input.guidance ?? existing.guidance,
+    lastEventAt: input.lastEventAt ?? existing.lastEventAt,
+    memory: input.memory ?? existing.memory,
     mode: input.mode,
     nextActions: input.nextActions ?? existing.nextActions,
     observations: input.observations ?? existing.observations,
@@ -223,8 +331,26 @@ export async function updateSession(
     verification: input.verification ?? existing.verification
   };
 
-  await saveSession(session, homeDir);
-  return session;
+  const events =
+    input.events ??
+    defaultStatusEventsForSession({
+      session
+    });
+  const historicalEvents = await loadSessionEvents(sessionId, homeDir);
+  const reduced = reduceSessionEvents([...historicalEvents, ...events]);
+
+  if (!reduced) {
+    throw new SessionStoreError(`Failed to reduce session \`${sessionId}\` from events.`);
+  }
+
+  const persisted = {
+    ...session,
+    ...reduced
+  };
+
+  await appendSessionEvents(sessionId, events, homeDir);
+  await saveSession(persisted, homeDir);
+  return persisted;
 }
 
 export async function saveSession(
@@ -241,14 +367,18 @@ export async function loadSession(
   homeDir?: string
 ): Promise<SessionRecord | null> {
   const path = getSessionFilePath(sessionId, homeDir);
+  const events = await loadSessionEvents(sessionId, homeDir);
 
   try {
     const raw = await readFile(path, "utf8");
     const parsed = JSON.parse(raw);
-    return sessionRecordSchema.parse(parsed);
+    const snapshot = sessionRecordSchema.parse(parsed);
+    const reduced = reduceSessionEvents(events);
+    return reduced ? sessionRecordSchema.parse(reduced) : snapshot;
   } catch (error) {
     if (isMissingFileError(error)) {
-      return null;
+      const reduced = reduceSessionEvents(events);
+      return reduced ? sessionRecordSchema.parse(reduced) : null;
     }
 
     if (error instanceof SyntaxError) {
@@ -263,6 +393,54 @@ export async function loadSession(
       error instanceof Error ? error.message : `Failed to load session \`${sessionId}\`.`
     );
   }
+}
+
+function defaultEventsForSession(args: {
+  id: string;
+  input: CreateSessionInput;
+  session: SessionRecord;
+}): SessionEvent[] {
+  return [
+    createSessionStartedEvent({
+      config: args.input.config,
+      cwd: args.input.cwd,
+      guidance: args.session.guidance,
+      id: args.id,
+      mode: args.input.mode,
+      prompt: args.input.prompt,
+      repoContext: args.input.repoContext
+    }),
+    createSummaryUpdatedEvent({
+      nextActions: args.session.nextActions,
+      summary: args.input.summary
+    }),
+    ...defaultStatusEventsForSession({
+      session: args.session
+    })
+  ];
+}
+
+function defaultStatusEventsForSession(args: {
+  session: SessionRecord;
+}): SessionEvent[] {
+  const payload = {
+    approvals: args.session.approvals,
+    artifacts: args.session.artifacts,
+    changedFiles: args.session.changedFiles,
+    pendingAction: args.session.pendingAction,
+    summary: args.session.summary,
+    verification: args.session.verification
+  };
+
+  if (args.session.status === "completed") {
+    return [createSessionCompletedEvent(payload)];
+  }
+
+  if (args.session.status === "paused") {
+    return [createSessionPausedEvent(payload)];
+  }
+
+  return [createSessionFailedEvent(payload)];
 }
 
 export async function listRecentSessions(

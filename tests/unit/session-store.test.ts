@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, unlink } from "node:fs/promises";
 import os from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -7,6 +7,7 @@ import {
   listRecentSessions,
   loadSession
 } from "../../src/session/store.js";
+import { getSessionEventsFilePath, getSessionFilePath } from "../../src/session/paths.js";
 
 const tempDirs: string[] = [];
 
@@ -73,6 +74,8 @@ describe("session store", () => {
     const loaded = await loadSession(created.id, homeDir);
 
     expect(loaded).toEqual(created);
+    expect(created.eventCount).toBeGreaterThan(0);
+    expect(created.lastEventAt).toBeTruthy();
   });
 
   it("lists recent sessions in descending updated order", async () => {
@@ -137,6 +140,84 @@ describe("session store", () => {
     const homeDir = await makeTempDir();
 
     await expect(listRecentSessions(5, homeDir)).resolves.toEqual([]);
+  });
+
+  it("writes an append-only event log alongside the session snapshot", async () => {
+    const homeDir = await makeTempDir();
+    const created = await createSession(
+      {
+        config: {},
+        cwd: "/workspace/project",
+        mode: "exec",
+        observations: [],
+        prompt: "inspect repo",
+        repoContext: {
+          guidanceFiles: ["AGENTS.md"],
+          isGitRepo: true,
+          topLevelEntries: [".git", "AGENTS.md"]
+        },
+        status: "completed",
+        summary: "done",
+        verification: {
+          commands: [],
+          inferred: true,
+          passed: true,
+          runs: []
+        }
+      },
+      homeDir
+    );
+
+    const rawEvents = await readFile(getSessionEventsFilePath(created.id, homeDir), "utf8");
+    const events = rawEvents
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as { type: string });
+
+    expect(events.map((event) => event.type)).toEqual([
+      "session_started",
+      "summary_updated",
+      "session_completed"
+    ]);
+  });
+
+  it("can rebuild a session from the event log when the snapshot is missing", async () => {
+    const homeDir = await makeTempDir();
+    const created = await createSession(
+      {
+        config: {
+          approvalPolicy: "prompt"
+        },
+        cwd: "/workspace/project",
+        mode: "exec",
+        nextActions: ["Inspect repo"],
+        observations: [],
+        prompt: "inspect repo",
+        repoContext: {
+          guidanceFiles: ["AGENTS.md"],
+          isGitRepo: true,
+          topLevelEntries: [".git", "AGENTS.md"]
+        },
+        status: "paused",
+        summary: "waiting for approval",
+        verification: {
+          commands: ["npm test"],
+          inferred: true,
+          passed: true,
+          runs: []
+        }
+      },
+      homeDir
+    );
+
+    await unlink(getSessionFilePath(created.id, homeDir));
+
+    const loaded = await loadSession(created.id, homeDir);
+
+    expect(loaded).not.toBeNull();
+    expect(loaded?.id).toBe(created.id);
+    expect(loaded?.status).toBe("paused");
+    expect(loaded?.eventCount).toBe(3);
   });
 });
 
