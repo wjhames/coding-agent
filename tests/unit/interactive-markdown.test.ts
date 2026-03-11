@@ -47,4 +47,24 @@ describe("interactive markdown", () => {
       )
     ).toBe(true);
   });
+
+  it("renders nested inline code inside bold list items", () => {
+    const lines = renderFinalMarkdown(
+      "1. **Unused `patchOperationSchema` export in `src/tools/apply-patch.ts`**",
+      120
+    );
+    const line = lines.find((item) => item.text.includes("Unused patchOperationSchema export"));
+
+    expect(line?.text).not.toContain("**");
+    expect(line?.text).not.toContain("`");
+    expect(line?.segments?.some((segment) => segment.bold && segment.text.includes("Unused "))).toBe(
+      true
+    );
+    expect(
+      line?.segments?.some(
+        (segment) =>
+          segment.backgroundColor === "#2b2f36" && segment.text === "patchOperationSchema"
+      )
+    ).toBe(true);
+  });
 });

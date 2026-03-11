@@ -232,7 +232,10 @@ function codeFenceDivider(width: number): MarkdownRenderLine {
   };
 }
 
-function tokenizeInlineMarkdown(line: string): MarkdownRenderSpan[] {
+function tokenizeInlineMarkdown(
+  line: string,
+  inheritedStyle: Omit<MarkdownRenderSpan, "text"> = {}
+): MarkdownRenderSpan[] {
   const tokens: MarkdownRenderSpan[] = [];
   let index = 0;
 
@@ -241,20 +244,21 @@ function tokenizeInlineMarkdown(line: string): MarkdownRenderSpan[] {
       return;
     }
 
+    const mergedStyle = mergeSpanStyle(inheritedStyle, style);
     const previous = tokens.at(-1);
     if (
       previous &&
-      previous.bold === style?.bold &&
-      previous.color === style?.color &&
-      previous.dimColor === style?.dimColor &&
-      previous.backgroundColor === style?.backgroundColor
+      previous.bold === mergedStyle.bold &&
+      previous.color === mergedStyle.color &&
+      previous.dimColor === mergedStyle.dimColor &&
+      previous.backgroundColor === mergedStyle.backgroundColor
     ) {
       previous.text += text;
       return;
     }
 
     tokens.push({
-      ...style,
+      ...mergedStyle,
       text
     });
   };
@@ -263,7 +267,7 @@ function tokenizeInlineMarkdown(line: string): MarkdownRenderSpan[] {
     const slice = line.slice(index);
     const linkMatch = slice.match(/^\[([^\]]+)\]\(([^)]+)\)/);
     if (linkMatch) {
-      pushText(linkMatch[1] ?? "");
+      tokens.push(...tokenizeInlineMarkdown(linkMatch[1] ?? "", inheritedStyle));
       pushText(` (${linkMatch[2]})`, {
         dimColor: true
       });
@@ -274,7 +278,12 @@ function tokenizeInlineMarkdown(line: string): MarkdownRenderSpan[] {
     if (slice.startsWith("**")) {
       const close = line.indexOf("**", index + 2);
       if (close !== -1) {
-        pushText(line.slice(index + 2, close), { bold: true });
+        tokens.push(
+          ...tokenizeInlineMarkdown(line.slice(index + 2, close), {
+            ...inheritedStyle,
+            bold: true
+          })
+        );
         index = close + 2;
         continue;
       }
@@ -283,7 +292,12 @@ function tokenizeInlineMarkdown(line: string): MarkdownRenderSpan[] {
     if (slice.startsWith("__")) {
       const close = line.indexOf("__", index + 2);
       if (close !== -1) {
-        pushText(line.slice(index + 2, close), { bold: true });
+        tokens.push(
+          ...tokenizeInlineMarkdown(line.slice(index + 2, close), {
+            ...inheritedStyle,
+            bold: true
+          })
+        );
         index = close + 2;
         continue;
       }
@@ -306,6 +320,16 @@ function tokenizeInlineMarkdown(line: string): MarkdownRenderSpan[] {
   }
 
   return tokens.length > 0 ? tokens : [{ text: line }];
+}
+
+function mergeSpanStyle(
+  base: Omit<MarkdownRenderSpan, "text">,
+  next?: Omit<MarkdownRenderSpan, "text">
+): Omit<MarkdownRenderSpan, "text"> {
+  return {
+    ...base,
+    ...(next ?? {})
+  };
 }
 
 function wrapInlineTokens(
