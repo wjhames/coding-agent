@@ -50,6 +50,7 @@ export interface InteractiveModel {
   cwd: string;
   doctor: RuntimeDoctor | null;
   input: string;
+  liveStatusLabel: string | null;
   pendingApproval: PendingApprovalInfo | null;
   plan: PlanState | null;
   profileName: string | null;
@@ -84,6 +85,7 @@ export function createInteractiveModel(args: {
     cwd: args.cwd,
     doctor: args.doctor,
     input: "",
+    liveStatusLabel: null,
     pendingApproval: null,
     plan: null,
     profileName: args.doctor?.defaultProfile ?? null,
@@ -179,6 +181,7 @@ export function enqueuePrompt(state: InteractiveModel, prompt: string): {
         }
       ],
       input: "",
+      liveStatusLabel: queued ? state.liveStatusLabel : "Thinking",
       queuedPrompts: queued ? [...state.queuedPrompts, { id: promptId, prompt }] : state.queuedPrompts,
       scrollOffset: 0
     }
@@ -198,6 +201,7 @@ export function beginPromptRun(state: InteractiveModel, promptId: string): Inter
         : block
     ),
     queuedPrompts: state.queuedPrompts.filter((entry) => entry.id !== promptId),
+    liveStatusLabel: "Thinking",
     runtimeStatus: "planning",
     scrollOffset: 0
   };
@@ -229,6 +233,7 @@ export function applyRuntimeEventToModel(
         ? appendActivity(
             {
               ...state,
+              liveStatusLabel: "Updating plan",
               plan: event.plan
             },
             {
@@ -243,14 +248,24 @@ export function applyRuntimeEventToModel(
           };
     case "tool_called":
       return event.tool === "write_plan"
-        ? state
-        : appendActivity(state, toolCalledToActivity(event.tool, event.inputSummary, state.cwd));
+        ? {
+            ...state,
+            liveStatusLabel: "Updating plan"
+          }
+        : appendActivity(
+            {
+              ...state,
+              liveStatusLabel: liveStatusLabelForTool(event.tool, event.inputSummary, state.cwd)
+            },
+            toolCalledToActivity(event.tool, event.inputSummary, state.cwd)
+          );
     case "tool_result":
       return applyToolResultEvent(state, event);
     case "approval_requested":
       return {
         ...state,
         approvalChoiceIndex: 0,
+        liveStatusLabel: "Waiting for approval",
         pendingApproval: toPendingApproval(event.approval, event.pendingAction),
         runtimeStatus: "paused",
         approvals: upsertApproval(state.approvals, event.approval),
@@ -269,6 +284,7 @@ export function applyRuntimeEventToModel(
       return appendSystemLine(
         {
           ...state,
+          liveStatusLabel: event.status === "approved" ? "Approval granted" : "Approval rejected",
           pendingApproval: null
         },
         `Approval ${event.status}.`,
@@ -284,6 +300,12 @@ export function applyRuntimeEventToModel(
       return appendActivity(
         {
           ...state,
+          liveStatusLabel:
+            event.verification.status === "failed"
+              ? "Verification failed"
+              : event.verification.status === "passed"
+                ? "Verification passed"
+                : "Verification finished",
           verification: event.verification
         },
         {
@@ -293,11 +315,30 @@ export function applyRuntimeEventToModel(
         }
       );
     case "assistant_delta":
-      return appendAssistantDelta(state, event.delta);
+      return appendAssistantDelta(
+        {
+          ...state,
+          liveStatusLabel: "Responding"
+        },
+        event.delta
+      );
     case "assistant_message":
-      return appendSettledAssistantMessage(state, event.text, event.at);
+      return appendSettledAssistantMessage(
+        {
+          ...state,
+          liveStatusLabel: "Responding"
+        },
+        event.text,
+        event.at
+      );
     case "run_finished":
-      return applyCommandResultToModel(state, event.result);
+      return applyCommandResultToModel(
+        {
+          ...state,
+          liveStatusLabel: null
+        },
+        event.result
+      );
   }
 }
 
@@ -310,6 +351,7 @@ export function applyCommandResultToModel(
     approvals: result.approvals,
     artifacts: result.artifacts,
     changedFiles: result.changedFiles,
+    liveStatusLabel: null,
     pendingApproval: result.pendingApproval,
     plan: result.plan,
     runtimeStatus:
@@ -410,6 +452,7 @@ function applyStatusEvent(
 ): InteractiveModel {
   const next = {
     ...state,
+    liveStatusLabel: liveStatusLabelForRuntimeStatus(event.status, event.detail, state.cwd),
     runtimeStatus: event.status
   };
 
@@ -429,7 +472,8 @@ function applyToolResultEvent(
     artifacts: event.artifacts ? mergeArtifacts(state.artifacts, event.artifacts) : state.artifacts,
     changedFiles: event.changedFiles
       ? [...new Set([...state.changedFiles, ...event.changedFiles])].sort()
-      : state.changedFiles
+      : state.changedFiles,
+    liveStatusLabel: event.error ? "Tool error" : state.liveStatusLabel
   };
 
   if (!event.error && event.tool !== "apply_patch" && event.tool !== "run_shell") {
@@ -541,8 +585,13 @@ function appendAssistantDelta(state: InteractiveModel, delta: string): Interacti
 
 function buildFullRenderLines(model: InteractiveModel, width: number): RenderLine[] {
   const transcriptLines = compactBlankLines(renderTranscriptBlocks(model, width));
-  const composerLines = renderComposer(model, width, transcriptLines.length > 0);
-  return [...transcriptLines, ...composerLines];
+  const liveStatusLines = renderLiveStatus(model, width);
+  const composerLines = renderComposer(
+    model,
+    width,
+    transcriptLines.length > 0 || liveStatusLines.length > 0
+  );
+  return [...transcriptLines, ...liveStatusLines, ...composerLines];
 }
 
 function renderTranscriptBlocks(model: InteractiveModel, width: number): RenderLine[] {
@@ -717,6 +766,35 @@ function renderComposer(state: InteractiveModel, width: number, hasTranscript: b
   ];
 
   return hasTranscript ? [{ text: BLANK_RENDER_LINE }, ...rendered] : rendered;
+}
+
+function renderLiveStatus(state: InteractiveModel, width: number): RenderLine[] {
+  if (!state.liveStatusLabel && state.queuedPrompts.length === 0) {
+    return [];
+  }
+
+  const lines = [
+    state.liveStatusLabel ?? "Working",
+    ...(state.queuedPrompts.length > 0
+      ? [`Queue: ${state.queuedPrompts.length} waiting`]
+      : [])
+  ];
+
+  return [
+    { text: BLANK_RENDER_LINE },
+    {
+      bold: true,
+      color: "#8ec5ff",
+      text: "• Working"
+    },
+    ...lines.flatMap((line) =>
+      wrapForRender(line, width - 2).map((wrapped) => ({
+        color: "#8ec5ff",
+        dimColor: line.startsWith("Queue:"),
+        text: `  ${wrapped}`
+      }))
+    )
+  ];
 }
 
 function compactBlankLines(lines: RenderLine[]): RenderLine[] {
@@ -1010,6 +1088,56 @@ function shouldInsertPhaseSeparator(previous: TranscriptBlock, next: TranscriptB
     previousPhase === "tooling" &&
     nextPhase === "assistant"
   );
+}
+
+function liveStatusLabelForTool(tool: Exclude<ToolName, "write_plan">, inputSummary: string, cwd: string): string {
+  const input = parseToolSummary(inputSummary);
+
+  switch (tool) {
+    case "read_file":
+      return `Reading ${normalizeDisplayPath(readPathFromSummary(input), cwd)}`;
+    case "list_files":
+      return `Listing ${normalizeDisplayPath(readPathFromSummary(input) ?? ".", cwd)}`;
+    case "search_files": {
+      const query = typeof input?.query === "string" ? input.query : "files";
+      return `Searching ${JSON.stringify(query)}`;
+    }
+    case "apply_patch":
+      return "Applying changes";
+    case "run_shell": {
+      const command = typeof input?.command === "string" ? input.command : "command";
+      return `Running ${normalizeInlineText(command, cwd)}`;
+    }
+  }
+}
+
+function liveStatusLabelForRuntimeStatus(
+  status: InteractiveModel["runtimeStatus"],
+  detail: string | undefined,
+  cwd: string
+): string | null {
+  if (detail && !shouldHideStatusDetail(detail)) {
+    return normalizeInlineText(detail, cwd);
+  }
+
+  switch (status) {
+    case "planning":
+      return "Thinking";
+    case "reading":
+      return "Reading files";
+    case "editing":
+      return "Applying changes";
+    case "verifying":
+      return "Running verification";
+    case "resuming":
+      return "Resuming session";
+    case "paused":
+      return "Waiting for approval";
+    case "completed":
+    case "failed":
+    case "idle":
+      return null;
+  }
 }
 
 function blockPhase(block: TranscriptBlock): "assistant" | "tooling" | null {

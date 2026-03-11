@@ -55,6 +55,30 @@ describe("interactive model", () => {
     expect(queued.state.blocks.at(-1)?.queued).toBe(true);
   });
 
+  it("shows a live working block while the agent is planning", () => {
+    const model = applyRuntimeEventToModel(
+      createInteractiveModel({
+        cwd: "/workspace/project",
+        doctor: null,
+        recentSessions: []
+      }),
+      {
+        at: "2026-03-10T10:00:00.000Z",
+        status: "planning",
+        type: "status"
+      }
+    );
+
+    const lines = buildViewportLines({
+      columns: 80,
+      model,
+      rows: 20
+    }).map((line) => line.text);
+
+    expect(lines.some((line) => line.includes("• Working"))).toBe(true);
+    expect(lines.some((line) => line.includes("Thinking"))).toBe(true);
+  });
+
   it("formats grouped exploration events without raw json", () => {
     let model = createInteractiveModel({
       cwd: "/workspace/project",
@@ -265,13 +289,11 @@ describe("interactive model", () => {
       model,
       rows: 20
     });
-    const userLineIndex = lines.findIndex((line) => line.text.includes("Walk me through this codebase"));
+    const metadataIndex = lines.findIndex((line) => line.text.includes("/workspace/project"));
 
     expect(lines).toHaveLength(20);
     expect(lines.at(-1)?.text).toContain("/workspace/project");
-    expect(lines[0]?.text.trim()).toBe("");
-    expect(userLineIndex).toBeGreaterThan(0);
-    expect(userLineIndex).toBeLessThan(lines.length - 4);
+    expect(metadataIndex).toBe(lines.length - 1);
   });
 
   it("does not bottom-align a short draft prompt", () => {
