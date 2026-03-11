@@ -527,7 +527,7 @@ describe("interactive model", () => {
     expect(model.blocks.find((block) => block.kind === "assistant")?.streaming).toBe(false);
   });
 
-  it("inserts separators between assistant reasoning and tool activity", () => {
+  it("inserts separators when tool activity returns to assistant output", () => {
     let model = createInteractiveModel({
       cwd: "/workspace/project",
       doctor: null,
@@ -546,6 +546,11 @@ describe("interactive model", () => {
       }),
       tool: "read_file",
       type: "tool_called"
+    });
+    model = applyRuntimeEventToModel(model, {
+      at: "2026-03-10T10:00:02.000Z",
+      text: "Finished reading.",
+      type: "assistant_message"
     });
 
     const lines = buildViewportLines({

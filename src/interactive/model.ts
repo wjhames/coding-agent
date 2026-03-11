@@ -1007,8 +1007,8 @@ function shouldInsertPhaseSeparator(previous: TranscriptBlock, next: TranscriptB
     previousPhase !== null &&
     nextPhase !== null &&
     previousPhase !== nextPhase &&
-    ((previousPhase === "assistant" && nextPhase === "tooling") ||
-      (previousPhase === "tooling" && nextPhase === "assistant"))
+    previousPhase === "tooling" &&
+    nextPhase === "assistant"
   );
 }
 
