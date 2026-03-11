@@ -107,6 +107,7 @@ describe("interactive model", () => {
     expect(model.blocks).toHaveLength(1);
     expect(model.blocks[0]?.kind).toBe("assistant");
     expect(model.blocks[0]?.lines.join("\n")).toBe("Hello world");
+    expect(model.blocks[0]?.streaming).toBe(true);
   });
 
   it("keeps plan state when plan updates stream into the transcript", () => {
@@ -454,6 +455,69 @@ describe("interactive model", () => {
     const reconciled = reconcileViewportScroll(detached, next, 80);
 
     expect(reconciled.scrollOffset).toBeGreaterThan(detached.scrollOffset);
+  });
+
+  it("settles streamed assistant blocks when the turn completes", () => {
+    let model = createInteractiveModel({
+      cwd: "/workspace/project",
+      doctor: null,
+      recentSessions: []
+    });
+
+    model = applyRuntimeEventToModel(model, {
+      at: "2026-03-10T10:00:00.000Z",
+      delta: "## Heading\n- item",
+      type: "assistant_delta"
+    });
+    model = applyCommandResultToModel(model, {
+      approvals: [],
+      artifacts: [],
+      changedFiles: [],
+      compaction: {
+        changedFilesSummary: null,
+        eventSummary: null,
+        observationSummary: null,
+        verificationSummary: null
+      },
+      eventCount: 0,
+      exitCode: 0,
+      guidance: {
+        activeRules: [],
+        sources: []
+      },
+      lastEventAt: null,
+      memory: {
+        artifacts: [],
+        decisions: [],
+        working: []
+      },
+      nextActions: [],
+      observations: [],
+      pendingApproval: null,
+      plan: null,
+      repoContext: {
+        guidanceFiles: [],
+        isGitRepo: true,
+        topLevelEntries: []
+      },
+      resumeCommand: null,
+      sessionId: "session-1",
+      status: "completed",
+      summary: "",
+      verification: {
+        commands: [],
+        inferred: true,
+        notRunReason: "No file changes were made.",
+        passed: false,
+        ran: false,
+        runs: [],
+        selectedCommands: [],
+        skippedCommands: [],
+        status: "not_run"
+      }
+    });
+
+    expect(model.blocks.find((block) => block.kind === "assistant")?.streaming).toBe(false);
   });
 
   it("estimates remaining context conservatively", () => {

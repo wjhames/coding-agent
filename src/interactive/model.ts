@@ -8,6 +8,11 @@ import type {
   ToolName,
   VerificationSummary
 } from "../cli/output.js";
+import {
+  renderFinalMarkdown,
+  renderStreamingMarkdown,
+  type MarkdownRenderLine as RenderLine
+} from "./markdown.js";
 import type { RuntimeDoctor } from "../runtime/api.js";
 import type { SessionRecord } from "../session/store.js";
 
@@ -32,15 +37,8 @@ export interface TranscriptBlock {
   kind: "activity" | "approval" | "assistant" | "system" | "user";
   lines: string[];
   queued?: boolean | undefined;
+  streaming?: boolean | undefined;
   tone: BlockTone;
-}
-
-export interface RenderLine {
-  backgroundColor?: string | undefined;
-  bold?: boolean | undefined;
-  color?: string | undefined;
-  dimColor?: boolean | undefined;
-  text: string;
 }
 
 export interface InteractiveModel {
@@ -297,19 +295,7 @@ export function applyRuntimeEventToModel(
     case "assistant_delta":
       return appendAssistantDelta(state, event.delta);
     case "assistant_message":
-      return {
-        ...state,
-        blocks: [
-          ...state.blocks,
-          {
-            id: `assistant:${event.at}`,
-            kind: "assistant",
-            lines: event.text.split("\n"),
-            tone: "default"
-          }
-        ],
-        scrollOffset: state.scrollOffset
-      };
+      return appendSettledAssistantMessage(state, event.text, event.at);
     case "run_finished":
       return applyCommandResultToModel(state, event.result);
   }
@@ -333,6 +319,7 @@ export function applyCommandResultToModel(
   };
 
   if (result.status === "failed") {
+    next = settleAssistantBlocks(next);
     next = appendSystemLine(next, result.summary, "warning");
   } else if (
     result.status === "completed" &&
@@ -340,17 +327,18 @@ export function applyCommandResultToModel(
     lastAssistantText(next) === null
   ) {
     next = {
-      ...next,
-      blocks: [
-        ...next.blocks,
-        {
-          id: `assistant:result:${Date.now()}`,
-          kind: "assistant",
-          lines: result.summary.split("\n"),
-          tone: "default"
-        }
-      ]
+      ...appendSettledAssistantMessage(next, result.summary, `result:${Date.now()}`),
+      approvals: next.approvals,
+      artifacts: next.artifacts,
+      changedFiles: next.changedFiles,
+      pendingApproval: next.pendingApproval,
+      plan: next.plan,
+      runtimeStatus: next.runtimeStatus,
+      sessionId: next.sessionId,
+      verification: next.verification
     };
+  } else {
+    next = settleAssistantBlocks(next);
   }
 
   return appendCompletionLine(
@@ -527,7 +515,8 @@ function appendAssistantDelta(state: InteractiveModel, delta: string): Interacti
         ...state.blocks.slice(0, -1),
         {
           ...last,
-          lines: `${currentText}${delta}`.split("\n")
+          lines: `${currentText}${delta}`.split("\n"),
+          streaming: true
         }
       ],
       scrollOffset: state.scrollOffset
@@ -542,6 +531,7 @@ function appendAssistantDelta(state: InteractiveModel, delta: string): Interacti
         id: `assistant:${Date.now()}:${Math.random().toString(16).slice(2, 8)}`,
         kind: "assistant",
         lines: delta.split("\n"),
+        streaming: true,
         tone: "default"
       }
     ],
@@ -666,25 +656,11 @@ function renderApprovalBlock(
 }
 
 function renderAssistantBlock(block: TranscriptBlock, width: number): RenderLine[] {
-  const lines: RenderLine[] = [];
-  let inCodeBlock = false;
-
-  for (const rawLine of block.lines) {
-    if (rawLine.trim().startsWith("```")) {
-      inCodeBlock = !inCodeBlock;
-      lines.push({
-        dimColor: true,
-        text: "─".repeat(Math.max(12, Math.min(width, 40)))
-      });
-      continue;
-    }
-
-    const rendered = renderAssistantContentLine(rawLine, width, inCodeBlock);
-    lines.push(...rendered);
-  }
-
-  lines.push({ text: BLANK_RENDER_LINE });
-  return lines;
+  const text = block.lines.join("\n");
+  const rendered = block.streaming
+    ? renderStreamingMarkdown(text, width)
+    : renderFinalMarkdown(text, width);
+  return [...rendered, { text: BLANK_RENDER_LINE }];
 }
 
 function renderComposer(state: InteractiveModel, width: number, hasTranscript: boolean): RenderLine[] {
@@ -985,60 +961,6 @@ function formatShellResultLines(
   return excerpt ? [summary, `Output: ${normalizeInlineText(excerpt, cwd)}`] : [summary];
 }
 
-function renderAssistantContentLine(
-  rawLine: string,
-  width: number,
-  inCodeBlock: boolean
-): RenderLine[] {
-  if (inCodeBlock) {
-    return wrapForRender(rawLine, width).map((line) => ({
-      color: "#c7d4ff",
-      text: `  ${line}`
-    }));
-  }
-
-  const headingMatch = rawLine.match(/^(#{1,6})\s+(.*)$/);
-  if (headingMatch) {
-    return wrapForRender(headingMatch[2] || "", width).map((line) => ({
-      bold: true,
-      text: line
-    }));
-  }
-
-  const quoteMatch = rawLine.match(/^>\s?(.*)$/);
-  if (quoteMatch) {
-    return wrapForRender(quoteMatch[1] || "", width - 2).map((line) => ({
-      dimColor: true,
-      text: `> ${line}`
-    }));
-  }
-
-  const bulletMatch = rawLine.match(/^(\s*(?:[-*]|\d+[.)]))\s+(.*)$/);
-  if (bulletMatch) {
-    return wrapWithPrefix(bulletMatch[2] || "", width, `${bulletMatch[1]} `, " ".repeat((bulletMatch[1] ?? "").length + 1)).map((line) => ({
-      text: line
-    }));
-  }
-
-  return wrapForRender(rawLine, width).map((line) => ({ text: line }));
-}
-
-function wrapWithPrefix(text: string, width: number, firstPrefix: string, restPrefix: string): string[] {
-  const availableFirst = Math.max(8, width - firstPrefix.length);
-  const availableRest = Math.max(8, width - restPrefix.length);
-  const parts = wrapForRender(text, availableFirst);
-
-  if (parts.length <= 1) {
-    return [`${firstPrefix}${parts[0] ?? ""}`];
-  }
-
-  const [first, ...rest] = parts;
-  return [
-    `${firstPrefix}${first}`,
-    ...rest.flatMap((line) => wrapForRender(line, availableRest).map((wrapped) => `${restPrefix}${wrapped}`))
-  ];
-}
-
 function firstNonEmptyLine(value: string | null | undefined): string | null {
   if (!value) {
     return null;
@@ -1048,6 +970,50 @@ function firstNonEmptyLine(value: string | null | undefined): string | null {
     .split("\n")
     .map((line) => line.trim())
     .find((line) => line.length > 0) ?? null;
+}
+
+function appendSettledAssistantMessage(
+  state: InteractiveModel,
+  text: string,
+  suffix: string
+): InteractiveModel {
+  const settled = settleAssistantBlocks(state);
+  return {
+    ...settled,
+    blocks: [
+      ...settled.blocks,
+      {
+        id: `assistant:${suffix}`,
+        kind: "assistant",
+        lines: text.split("\n"),
+        streaming: false,
+        tone: "default"
+      }
+    ],
+    scrollOffset: settled.scrollOffset
+  };
+}
+
+function settleAssistantBlocks(state: InteractiveModel): InteractiveModel {
+  let changed = false;
+  const blocks = state.blocks.map((block) => {
+    if (block.kind === "assistant" && block.streaming) {
+      changed = true;
+      return {
+        ...block,
+        streaming: false
+      };
+    }
+
+    return block;
+  });
+
+  return changed
+    ? {
+        ...state,
+        blocks
+      }
+    : state;
 }
 
 function findLastApprovalId(id: string, pendingApproval: PendingApprovalInfo): string {
