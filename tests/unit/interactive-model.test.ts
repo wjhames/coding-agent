@@ -6,6 +6,7 @@ import {
   createInteractiveModel,
   enqueuePrompt,
   estimateContextLeftPercent,
+  insertInteractiveLineBreak,
   reconcileViewportScroll,
   setInteractiveInput
 } from "../../src/interactive/model.js";
@@ -50,7 +51,7 @@ describe("interactive model", () => {
     const queued = enqueuePrompt(running, "follow up task");
 
     expect(queued.state.queuedPrompts).toHaveLength(1);
-    expect(queued.state.blocks.at(-1)?.lines[0]).toContain("(queued)");
+    expect(queued.state.blocks.at(-1)?.queued).toBe(true);
   });
 
   it("formats grouped exploration events without raw json", () => {
@@ -305,6 +306,119 @@ describe("interactive model", () => {
 
     expect(lines[0]?.text).toContain("draft prompt");
     expect(lines.at(-1)?.text).toContain("/workspace/project");
+  });
+
+  it("supports multiline composer input", () => {
+    const model = insertInteractiveLineBreak(
+      setInteractiveInput(
+        createInteractiveModel({
+          cwd: "/workspace/project",
+          doctor: null,
+          recentSessions: []
+        }),
+        "first line"
+      )
+    );
+
+    const lines = buildViewportLines({
+      columns: 80,
+      model,
+      rows: 20
+    });
+
+    expect(lines[0]?.text).toContain("first line");
+    expect(lines[1]?.text.trim()).toBe("█");
+  });
+
+  it("renders approval blocks with explicit action details", () => {
+    const model = applyRuntimeEventToModel(
+      createInteractiveModel({
+        cwd: "/workspace/project",
+        doctor: null,
+        recentSessions: []
+      }),
+      {
+        approval: {
+          actionClass: "shell_side_effect",
+          command: "npm test",
+          id: "approval-1",
+          reason: "shell_side_effect",
+          status: "pending",
+          summary: "Approval required to run shell command: npm test",
+          tool: "run_shell"
+        },
+        at: "2026-03-10T10:00:00.000Z",
+        pendingAction: {
+          action: {
+            command: "npm test"
+          },
+          approval: {
+            actionClass: "shell_side_effect",
+            command: "npm test",
+            id: "approval-1",
+            reason: "shell_side_effect",
+            status: "pending",
+            summary: "Approval required to run shell command: npm test",
+            tool: "run_shell"
+          },
+          tool: "run_shell"
+        },
+        type: "approval_requested"
+      }
+    );
+
+    const lines = buildViewportLines({
+      columns: 100,
+      model,
+      rows: 20
+    }).map((line) => line.text);
+
+    expect(lines.some((line) => line.includes("Approval needed"))).toBe(true);
+    expect(lines.some((line) => line.includes("Tool: run_shell"))).toBe(true);
+    expect(lines.some((line) => line.includes("Command: npm test"))).toBe(true);
+  });
+
+  it("renders verification failures with a summary and output excerpt", () => {
+    const model = applyRuntimeEventToModel(
+      createInteractiveModel({
+        cwd: "/workspace/project",
+        doctor: null,
+        recentSessions: []
+      }),
+      {
+        at: "2026-03-10T10:00:00.000Z",
+        type: "verification_completed",
+        verification: {
+          commands: ["npm test"],
+          inferred: true,
+          notRunReason: null,
+          passed: false,
+          ran: true,
+          runs: [
+            {
+              command: "npm test",
+              exitCode: 1,
+              passed: false,
+              stderr: "Expected 1 to equal 2\nat test.ts:1",
+              stdout: ""
+            }
+          ],
+          selectedCommands: ["npm test"],
+          skippedCommands: [],
+          status: "failed"
+        }
+      }
+    );
+
+    const lines = buildViewportLines({
+      columns: 100,
+      model,
+      rows: 20
+    }).map((line) => line.text);
+
+    expect(lines.some((line) => line.includes("Verification failed"))).toBe(true);
+    expect(lines.some((line) => line.includes("[fail] npm test"))).toBe(true);
+    expect(lines.some((line) => line.includes("Output: Expected 1 to equal 2"))).toBe(true);
   });
 
   it("preserves detached scroll while new lines stream in", () => {

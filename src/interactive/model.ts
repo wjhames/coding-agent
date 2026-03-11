@@ -12,11 +12,11 @@ import type { RuntimeDoctor } from "../runtime/api.js";
 import type { SessionRecord } from "../session/store.js";
 
 const CONTEXT_BUDGET_CHARS = 18_000;
-const MAX_GROUPED_ACTIVITY_LINES = 8;
+const MAX_GROUPED_ACTIVITY_LINES = 12;
 const BLANK_RENDER_LINE = " ";
 const LIVE_EDGE_BOTTOM_ALIGN_THRESHOLD = 0.75;
-const PAGE_SCROLL_STEP = 12;
-const LINE_SCROLL_STEP = 3;
+const PAGE_SCROLL_STEP = 18;
+const LINE_SCROLL_STEP = 4;
 
 type ActivityBucket = "command" | "edit" | "explore" | "plan" | "verification";
 type BlockTone = "default" | "dim" | "success" | "warning";
@@ -119,9 +119,16 @@ export function trimInteractiveInput(state: InteractiveModel): InteractiveModel 
   };
 }
 
+export function insertInteractiveLineBreak(state: InteractiveModel): InteractiveModel {
+  return {
+    ...state,
+    input: `${state.input}\n`
+  };
+}
+
 export function scrollInteractiveViewport(
   state: InteractiveModel,
-  direction: "down" | "end" | "page_down" | "page_up" | "up"
+  direction: "down" | "end" | "page_down" | "page_up" | "top" | "up"
 ): InteractiveModel {
   const delta =
     direction === "up"
@@ -136,7 +143,12 @@ export function scrollInteractiveViewport(
 
   return {
     ...state,
-    scrollOffset: direction === "end" ? 0 : Math.max(0, state.scrollOffset + delta)
+    scrollOffset:
+      direction === "end"
+        ? 0
+        : direction === "top"
+          ? Number.MAX_SAFE_INTEGER
+          : Math.max(0, state.scrollOffset + delta)
   };
 }
 
@@ -163,7 +175,7 @@ export function enqueuePrompt(state: InteractiveModel, prompt: string): {
         {
           id: promptId,
           kind: "user",
-          lines: [queued ? `${prompt} (queued)` : prompt],
+          lines: [prompt],
           queued,
           tone: "default"
         }
@@ -223,10 +235,7 @@ export function applyRuntimeEventToModel(
             },
             {
               bucket: "plan",
-              lines: [
-                event.plan.summary,
-                ...event.plan.items.map((item) => `[${item.status}] ${item.content}`)
-              ],
+              lines: [event.plan.summary, ...event.plan.items.map(formatPlanItemLine)],
               tone: "dim"
             }
           )
@@ -252,7 +261,7 @@ export function applyRuntimeEventToModel(
           {
             id: `approval:${event.at}`,
             kind: "approval",
-            lines: [event.approval.summary],
+            lines: formatApprovalLines(event.approval, event.pendingAction),
             tone: "warning"
           }
         ],
@@ -270,7 +279,7 @@ export function applyRuntimeEventToModel(
     case "verification_started":
       return appendActivity(state, {
         bucket: "verification",
-        lines: event.commands.map((command) => `Run ${command}`),
+        lines: formatVerificationStartLines(event.commands),
         tone: "dim"
       });
     case "verification_completed":
@@ -344,10 +353,13 @@ export function applyCommandResultToModel(
     };
   }
 
-  return {
-    ...next,
-    scrollOffset: state.scrollOffset
-  };
+  return appendCompletionLine(
+    {
+      ...next,
+      scrollOffset: state.scrollOffset
+    },
+    result
+  );
 }
 
 export function buildViewportLines(args: {
@@ -472,7 +484,7 @@ function appendActivity(
     last &&
     last.kind === "activity" &&
     last.bucket === activity.bucket &&
-    last.lines.length + activity.lines.length <= MAX_GROUPED_ACTIVITY_LINES
+    last.lines.length + activity.lines.length <= groupedActivityLineLimit(activity.bucket)
   ) {
     return {
       ...state,
@@ -562,21 +574,16 @@ function renderBlock(
   if (block.kind === "user") {
     return [
       ...wrapForRender(block.lines.join("\n"), args.width - 4).map((line) => ({
-        backgroundColor: "#2f3338",
-        color: "#f5f5f5",
-        text: ` ${padLine(line, args.width - 2)} `
+        backgroundColor: block.queued ? "#26292d" : "#2f3338",
+        color: block.queued ? "#b8bec5" : "#f5f5f5",
+        text: ` ${padLine(block.queued && line === block.lines[0] ? `Queued: ${line}` : line, args.width - 2)} `
       })),
       { text: BLANK_RENDER_LINE }
     ];
   }
 
   if (block.kind === "assistant") {
-    return [
-      ...wrapForRender(block.lines.join("\n"), args.width).map((line) => ({
-        text: line
-      })),
-      { text: BLANK_RENDER_LINE }
-    ];
+    return renderAssistantBlock(block, args.width);
   }
 
   if (block.kind === "system") {
@@ -593,24 +600,14 @@ function renderBlock(
     const options =
       args.pendingApproval && block.id === findLastApprovalId(block.id, args.pendingApproval)
         ? [
-            args.approvalChoiceIndex === 0 ? "[Approve]" : " Approve ",
+            args.approvalChoiceIndex === 0 ? "[Approve once]" : " Approve once ",
             args.approvalChoiceIndex === 1 ? "[Reject]" : " Reject "
           ].join("  ")
         : null;
-    return renderLabeledBlock(block, args.width, "Approval needed", options ? [options] : []);
+    return renderApprovalBlock(block, args.width, options);
   }
 
-  const title =
-    block.bucket === "explore"
-      ? "Explored"
-      : block.bucket === "edit"
-        ? "Edited"
-        : block.bucket === "command"
-          ? "Ran command"
-          : block.bucket === "plan"
-            ? "Plan"
-            : "Verification";
-  return renderLabeledBlock(block, args.width, title, []);
+  return renderLabeledBlock(block, args.width, activityTitle(block), []);
 }
 
 function renderLabeledBlock(
@@ -641,21 +638,72 @@ function renderLabeledBlock(
   return lines;
 }
 
+function renderApprovalBlock(
+  block: TranscriptBlock,
+  width: number,
+  options: string | null
+): RenderLine[] {
+  const lines: RenderLine[] = [
+    {
+      bold: true,
+      color: "yellow",
+      text: "• Approval needed"
+    }
+  ];
+
+  for (const rawLine of [...block.lines, ...(options ? [options] : [])]) {
+    for (const line of wrapForRender(rawLine, width - 4)) {
+      lines.push({
+        backgroundColor: "#332500",
+        color: "#f7d774",
+        text: ` ${padLine(line, width - 2)} `
+      });
+    }
+  }
+
+  lines.push({ text: BLANK_RENDER_LINE });
+  return lines;
+}
+
+function renderAssistantBlock(block: TranscriptBlock, width: number): RenderLine[] {
+  const lines: RenderLine[] = [];
+  let inCodeBlock = false;
+
+  for (const rawLine of block.lines) {
+    if (rawLine.trim().startsWith("```")) {
+      inCodeBlock = !inCodeBlock;
+      lines.push({
+        dimColor: true,
+        text: "─".repeat(Math.max(12, Math.min(width, 40)))
+      });
+      continue;
+    }
+
+    const rendered = renderAssistantContentLine(rawLine, width, inCodeBlock);
+    lines.push(...rendered);
+  }
+
+  lines.push({ text: BLANK_RENDER_LINE });
+  return lines;
+}
+
 function renderComposer(state: InteractiveModel, width: number, hasTranscript: boolean): RenderLine[] {
   const placeholder =
     state.pendingApproval !== null && state.input.length === 0
-      ? "Enter approves selected action. Type to queue the next prompt."
+      ? "Type to queue the next prompt. Enter approves the selected action."
+      : state.queuedPrompts.length > 0 && state.input.length === 0
+        ? `Queue next prompt (${state.queuedPrompts.length} waiting)`
       : state.recentSessions.length > 0 && state.blocks.length === 0 && state.input.length === 0
         ? "Type a task. Press Enter on empty input to resume the latest session."
         : "Type a task";
   const inputBody = state.input.length > 0 ? state.input : placeholder;
-  const inputLines = wrapForRender(inputBody, width - 8);
+  const inputLines = wrapForRender(inputBody, width - 10);
 
   const rendered = [
     ...inputLines.map((line, index) => ({
       backgroundColor: "#25282d",
       color: state.input.length > 0 ? "#f5f5f5" : "#9aa1a8",
-      text: `   ${padLine(index === inputLines.length - 1 && state.input.length > 0 ? `${line}█` : line, width - 6)}   `
+      text: `    ${padLine(index === inputLines.length - 1 ? `${line}${state.input.length > 0 ? "█" : ""}` : line, width - 8)}    `
     })),
     {
       dimColor: true,
@@ -719,7 +767,7 @@ function toolCalledToActivity(
     case "list_files":
       return {
         bucket: "explore",
-        lines: [`List files in ${normalizeDisplayPath(readPathFromSummary(input) ?? ".", cwd)}`],
+        lines: [`Listed ${normalizeDisplayPath(readPathFromSummary(input) ?? ".", cwd)}`],
         tone: "default"
       };
     case "search_files": {
@@ -727,7 +775,7 @@ function toolCalledToActivity(
       return {
         bucket: "explore",
         lines: [
-          `Search ${JSON.stringify(query)} in ${normalizeDisplayPath(readPathFromSummary(input) ?? ".", cwd)}`
+          `Searched ${JSON.stringify(query)} in ${normalizeDisplayPath(readPathFromSummary(input) ?? ".", cwd)}`
         ],
         tone: "default"
       };
@@ -736,7 +784,7 @@ function toolCalledToActivity(
       const count = Array.isArray(input?.operations) ? input.operations.length : 0;
       return {
         bucket: "edit",
-        lines: [count > 0 ? `Apply patch with ${count} change${count === 1 ? "" : "s"}` : "Apply patch"],
+        lines: [count > 0 ? `Prepared ${count} patch change${count === 1 ? "" : "s"}` : "Prepared patch"],
         tone: "default"
       };
     }
@@ -774,46 +822,232 @@ function toolResultToActivity(
   }
 
   if (event.tool === "apply_patch") {
+    const changedFiles = event.changedFiles?.map((path) => normalizeDisplayPath(path, cwd)) ?? [];
     return {
       bucket: "edit",
-      lines: [
-        event.changedFiles && event.changedFiles.length > 0
-          ? `Changed ${event.changedFiles.map((path) => normalizeDisplayPath(path, cwd)).join(", ")}`
-          : "Patch applied"
-      ],
+      lines:
+        changedFiles.length === 0
+          ? ["Patch applied"]
+          : changedFiles.length <= 4
+            ? [`Updated ${changedFiles.length} file${changedFiles.length === 1 ? "" : "s"}`, ...changedFiles]
+            : [`Updated ${changedFiles.length} files`, ...changedFiles.slice(0, 3), `+${changedFiles.length - 3} more`],
       tone: "success"
     };
   }
 
   return {
     bucket: "command",
-    lines: [normalizeInlineText(event.observation?.summary ?? "Command completed.", cwd)],
+    lines: formatShellResultLines(event, cwd),
     tone: "default"
   };
 }
 
 function formatVerificationLines(verification: VerificationSummary): string[] {
   const lines: string[] = [];
+  const passedCount = verification.runs.filter((run) => run.passed).length;
+  const failedCount = verification.runs.length - passedCount;
+  const skippedCount = verification.skippedCommands.length;
+
+  if (verification.status === "passed") {
+    lines.push(`Passed ${passedCount} verification command${passedCount === 1 ? "" : "s"}`);
+  } else if (verification.status === "failed") {
+    lines.push(`Failed ${failedCount} of ${verification.runs.length} verification command${verification.runs.length === 1 ? "" : "s"}`);
+  } else if (verification.notRunReason) {
+    lines.push(verification.notRunReason);
+  }
 
   if (verification.runs.length > 0) {
     lines.push(
       ...verification.runs.map((run) =>
-        `${run.passed ? "Passed" : "Failed"} ${run.command} (exit ${run.exitCode})`
+        `${run.passed ? "[pass]" : "[fail]"} ${run.command} (exit ${run.exitCode})`
       )
     );
+
+    if (!verification.passed) {
+      const failingRun = verification.runs.find((run) => !run.passed);
+      const excerpt = firstNonEmptyLine(failingRun?.stderr) ?? firstNonEmptyLine(failingRun?.stdout);
+      if (excerpt) {
+        lines.push(`Output: ${excerpt}`);
+      }
+    }
   }
 
-  if (verification.skippedCommands.length > 0) {
+  if (skippedCount > 0) {
     lines.push(
       ...verification.skippedCommands.map((item) => `Skipped ${item.command} (${item.reason})`)
     );
   }
 
-  if (verification.notRunReason) {
-    lines.push(verification.notRunReason);
+  return lines.length > 0 ? lines : ["No verification commands ran."];
+}
+
+function activityTitle(block: TranscriptBlock): string {
+  if (block.bucket === "verification") {
+    return block.tone === "warning" ? "Verification failed" : block.tone === "success" ? "Verification passed" : "Verification";
+  }
+  if (block.bucket === "plan") {
+    return "Plan update";
+  }
+  if (block.bucket === "command") {
+    return block.lines.length > 1 ? `Ran ${block.lines.length} commands` : "Ran command";
+  }
+  if (block.bucket === "edit") {
+    return block.lines.length > 1 ? `Edited ${block.lines.length - 1} files` : "Edited";
+  }
+  return block.lines.length > 1 ? `Explored ${block.lines.length} items` : "Explored";
+}
+
+function groupedActivityLineLimit(bucket: ActivityBucket): number {
+  if (bucket === "explore") {
+    return 16;
+  }
+  if (bucket === "command" || bucket === "verification") {
+    return 10;
+  }
+  return MAX_GROUPED_ACTIVITY_LINES;
+}
+
+function formatPlanItemLine(item: PlanState["items"][number]): string {
+  const marker =
+    item.status === "completed" ? "[done]" : item.status === "in_progress" ? "[doing]" : "[todo]";
+  return `${marker} ${item.content}`;
+}
+
+function formatApprovalLines(
+  approval: Approval,
+  pendingAction: {
+    action: { command?: string; operations?: unknown[] };
+    tool: "apply_patch" | "run_shell";
+  }
+): string[] {
+  const lines = [
+    approval.summary,
+    `Tool: ${pendingAction.tool}`,
+    `Class: ${approval.actionClass}`,
+    `Reason: ${approval.reason}`
+  ];
+
+  if (pendingAction.tool === "run_shell" && pendingAction.action.command) {
+    lines.push(`Command: ${pendingAction.action.command}`);
   }
 
-  return lines.length > 0 ? lines : ["No verification commands ran."];
+  if (pendingAction.tool === "apply_patch") {
+    lines.push(`Patch operations: ${pendingAction.action.operations?.length ?? 0}`);
+  }
+
+  return lines;
+}
+
+function formatVerificationStartLines(commands: string[]): string[] {
+  if (commands.length === 0) {
+    return ["No verification commands selected."];
+  }
+
+  return commands.length <= 3
+    ? [`Running ${commands.length} verification command${commands.length === 1 ? "" : "s"}`, ...commands]
+    : [`Running ${commands.length} verification commands`, ...commands.slice(0, 2), `+${commands.length - 2} more`];
+}
+
+function appendCompletionLine(state: InteractiveModel, result: CommandResult): InteractiveModel {
+  const line =
+    result.status === "completed"
+      ? result.verification.status === "passed"
+        ? `Completed. Verification passed.`
+        : result.verification.status === "not_run"
+          ? "Completed."
+          : "Completed with verification issues."
+      : result.status === "failed"
+        ? "Run failed."
+        : null;
+
+  if (!line) {
+    return state;
+  }
+
+  const last = state.blocks.at(-1);
+  if (last?.kind === "system" && last.lines[0] === line) {
+    return state;
+  }
+
+  return appendSystemLine(
+    state,
+    line,
+    result.status === "completed" && result.verification.status !== "failed" ? "success" : "warning"
+  );
+}
+
+function formatShellResultLines(
+  event: Extract<RuntimeEvent, { type: "tool_result" }>,
+  cwd: string
+): string[] {
+  const summary = event.observation?.query ? `$ ${normalizeInlineText(event.observation.query, cwd)}` : "Command completed.";
+  const excerpt = firstNonEmptyLine(event.observation?.excerpt);
+  return excerpt ? [summary, `Output: ${normalizeInlineText(excerpt, cwd)}`] : [summary];
+}
+
+function renderAssistantContentLine(
+  rawLine: string,
+  width: number,
+  inCodeBlock: boolean
+): RenderLine[] {
+  if (inCodeBlock) {
+    return wrapForRender(rawLine, width).map((line) => ({
+      color: "#c7d4ff",
+      text: `  ${line}`
+    }));
+  }
+
+  const headingMatch = rawLine.match(/^(#{1,6})\s+(.*)$/);
+  if (headingMatch) {
+    return wrapForRender(headingMatch[2] || "", width).map((line) => ({
+      bold: true,
+      text: line
+    }));
+  }
+
+  const quoteMatch = rawLine.match(/^>\s?(.*)$/);
+  if (quoteMatch) {
+    return wrapForRender(quoteMatch[1] || "", width - 2).map((line) => ({
+      dimColor: true,
+      text: `> ${line}`
+    }));
+  }
+
+  const bulletMatch = rawLine.match(/^(\s*(?:[-*]|\d+[.)]))\s+(.*)$/);
+  if (bulletMatch) {
+    return wrapWithPrefix(bulletMatch[2] || "", width, `${bulletMatch[1]} `, " ".repeat((bulletMatch[1] ?? "").length + 1)).map((line) => ({
+      text: line
+    }));
+  }
+
+  return wrapForRender(rawLine, width).map((line) => ({ text: line }));
+}
+
+function wrapWithPrefix(text: string, width: number, firstPrefix: string, restPrefix: string): string[] {
+  const availableFirst = Math.max(8, width - firstPrefix.length);
+  const availableRest = Math.max(8, width - restPrefix.length);
+  const parts = wrapForRender(text, availableFirst);
+
+  if (parts.length <= 1) {
+    return [`${firstPrefix}${parts[0] ?? ""}`];
+  }
+
+  const [first, ...rest] = parts;
+  return [
+    `${firstPrefix}${first}`,
+    ...rest.flatMap((line) => wrapForRender(line, availableRest).map((wrapped) => `${restPrefix}${wrapped}`))
+  ];
+}
+
+function firstNonEmptyLine(value: string | null | undefined): string | null {
+  if (!value) {
+    return null;
+  }
+
+  return value
+    .split("\n")
+    .map((line) => line.trim())
+    .find((line) => line.length > 0) ?? null;
 }
 
 function findLastApprovalId(id: string, pendingApproval: PendingApprovalInfo): string {

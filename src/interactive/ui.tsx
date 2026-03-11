@@ -12,6 +12,7 @@ import {
   buildViewportLines,
   createInteractiveModel,
   enqueuePrompt,
+  insertInteractiveLineBreak,
   nextQueuedPrompt,
   reconcileViewportScroll,
   refreshRecentSessions,
@@ -245,7 +246,17 @@ export function InteractiveApp(props: {
       return;
     }
 
+    if (key.home) {
+      updateModel((current) => scrollInteractiveViewport(current, "top"));
+      return;
+    }
+
     if (key.end) {
+      updateModel((current) => scrollInteractiveViewport(current, "end"));
+      return;
+    }
+
+    if (key.ctrl && input === "l") {
       updateModel((current) => scrollInteractiveViewport(current, "end"));
       return;
     }
@@ -257,6 +268,11 @@ export function InteractiveApp(props: {
 
     if (key.backspace || key.delete) {
       updateModel((current) => trimInteractiveInput(current));
+      return;
+    }
+
+    if ((key.ctrl && input === "j") || (key.return && (key.shift || key.meta))) {
+      updateModel((current) => insertInteractiveLineBreak(current));
       return;
     }
 
