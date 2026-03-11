@@ -32,8 +32,9 @@ describe("interactive model", () => {
       rows: 12
     });
 
-    expect(lines[0]?.text).toContain("Type a task");
-    expect(lines[1]?.text).toContain("gpt-4.1-mini");
+    expect(lines[0]?.text.trim()).toBe("");
+    expect(lines[1]?.text).toContain("Type a task");
+    expect(lines.at(-1)?.text).toContain("gpt-4.1-mini");
   });
 
   it("queues prompts while a run is active and marks the user block", () => {
@@ -233,10 +234,13 @@ describe("interactive model", () => {
       rows: 20
     });
     const composerIndex = lines.findIndex((line) => line.text.includes("Type a task"));
+    let blankRun = 0;
+    for (let index = composerIndex - 1; index >= 0 && lines[index]?.text.trim() === ""; index -= 1) {
+      blankRun += 1;
+    }
 
     expect(composerIndex).toBeGreaterThan(0);
-    expect(lines[composerIndex - 1]?.text.trim()).toBe("");
-    expect(lines[composerIndex - 2]?.text.trim()).not.toBe("");
+    expect(blankRun).toBeLessThanOrEqual(2);
   });
 
   it("bottom-aligns an active conversation at the live edge", () => {
@@ -285,8 +289,9 @@ describe("interactive model", () => {
       rows: 20
     });
 
-    expect(lines).toHaveLength(2);
-    expect(lines[0]?.text).toContain("draft prompt");
+    expect(lines).toHaveLength(4);
+    expect(lines[0]?.text.trim()).toBe("");
+    expect(lines[1]?.text).toContain("draft prompt");
   });
 
   it("keeps the composer near the top while typing before submit", () => {
@@ -305,7 +310,8 @@ describe("interactive model", () => {
       rows: 20
     });
 
-    expect(lines[0]?.text).toContain("draft prompt");
+    expect(lines[0]?.text.trim()).toBe("");
+    expect(lines[1]?.text).toContain("draft prompt");
     expect(lines.at(-1)?.text).toContain("/workspace/project");
   });
 
@@ -327,8 +333,9 @@ describe("interactive model", () => {
       rows: 20
     });
 
-    expect(lines[0]?.text).toContain("first line");
-    expect(lines[1]?.text.trim()).toBe("█");
+    expect(lines[0]?.text.trim()).toBe("");
+    expect(lines[1]?.text).toContain("first line");
+    expect(lines[2]?.text.trim()).toBe("█");
   });
 
   it("renders approval blocks with explicit action details", () => {
@@ -518,6 +525,36 @@ describe("interactive model", () => {
     });
 
     expect(model.blocks.find((block) => block.kind === "assistant")?.streaming).toBe(false);
+  });
+
+  it("inserts separators between assistant reasoning and tool activity", () => {
+    let model = createInteractiveModel({
+      cwd: "/workspace/project",
+      doctor: null,
+      recentSessions: []
+    });
+
+    model = applyRuntimeEventToModel(model, {
+      at: "2026-03-10T10:00:00.000Z",
+      text: "Thinking...",
+      type: "assistant_message"
+    });
+    model = applyRuntimeEventToModel(model, {
+      at: "2026-03-10T10:00:01.000Z",
+      inputSummary: JSON.stringify({
+        path: "/workspace/project/package.json"
+      }),
+      tool: "read_file",
+      type: "tool_called"
+    });
+
+    const lines = buildViewportLines({
+      columns: 100,
+      model,
+      rows: 20
+    });
+
+    expect(lines.some((line) => /^─{18,}$/.test(line.text))).toBe(true);
   });
 
   it("estimates remaining context conservatively", () => {

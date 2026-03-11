@@ -324,7 +324,19 @@ export function InteractiveApp(props: {
           {...(line.dimColor ? { dimColor: true } : {})}
           wrap="truncate-end"
         >
-          {line.text}
+          {line.segments
+            ? line.segments.map((segment, segmentIndex) => (
+                <Text
+                  key={`${index}:${segmentIndex}`}
+                  {...(segment.backgroundColor ? { backgroundColor: segment.backgroundColor } : {})}
+                  {...(segment.bold ? { bold: true } : {})}
+                  {...(segment.color ? { color: segment.color } : {})}
+                  {...(segment.dimColor ? { dimColor: true } : {})}
+                >
+                  {segment.text}
+                </Text>
+              ))
+            : line.text}
         </Text>
       ))}
     </Box>

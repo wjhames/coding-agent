@@ -10,7 +10,7 @@ describe("interactive markdown", () => {
     const text = lines.map((line) => line.text);
 
     expect(text).toContain("Overview");
-    expect(text).toContain("- first item");
+    expect(text).toContain("• first item");
     expect(text).toContain("1. numbered item");
     expect(text).toContain("> quoted line");
   });
@@ -32,7 +32,19 @@ describe("interactive markdown", () => {
     const text = lines.map((line) => line.text);
 
     expect(text).toContain("Paragraph with bold text");
-    expect(text).toContain("- item one");
+    expect(text).toContain("• item one");
     expect(text).toContain("  const x = 1;");
+  });
+
+  it("renders inline bold and code as styled segments", () => {
+    const lines = renderFinalMarkdown("Use **bold** and `code` here.", 60);
+    const line = lines.find((item) => item.text.includes("Use bold and code here."));
+
+    expect(line?.segments?.some((segment) => segment.bold && segment.text === "bold")).toBe(true);
+    expect(
+      line?.segments?.some(
+        (segment) => segment.backgroundColor === "#2b2f36" && segment.text === "code"
+      )
+    ).toBe(true);
   });
 });

@@ -540,17 +540,36 @@ function appendAssistantDelta(state: InteractiveModel, delta: string): Interacti
 }
 
 function buildFullRenderLines(model: InteractiveModel, width: number): RenderLine[] {
-  const transcriptLines = compactBlankLines(
-    model.blocks.flatMap((block) =>
-      renderBlock(block, {
+  const transcriptLines = compactBlankLines(renderTranscriptBlocks(model, width));
+  const composerLines = renderComposer(model, width, transcriptLines.length > 0);
+  return [...transcriptLines, ...composerLines];
+}
+
+function renderTranscriptBlocks(model: InteractiveModel, width: number): RenderLine[] {
+  const rendered: RenderLine[] = [];
+
+  model.blocks.forEach((block, index) => {
+    const previous = index > 0 ? model.blocks[index - 1] : null;
+    if (previous && shouldInsertPhaseSeparator(previous, block)) {
+      rendered.push(
+        {
+          dimColor: true,
+          text: "─".repeat(Math.max(18, Math.min(width, 56)))
+        },
+        { text: BLANK_RENDER_LINE }
+      );
+    }
+
+    rendered.push(
+      ...renderBlock(block, {
         approvalChoiceIndex: model.approvalChoiceIndex,
         pendingApproval: model.pendingApproval,
         width
       })
-    )
-  );
-  const composerLines = renderComposer(model, width, transcriptLines.length > 0);
-  return [...transcriptLines, ...composerLines];
+    );
+  });
+
+  return rendered;
 }
 
 function renderBlock(
@@ -676,11 +695,19 @@ function renderComposer(state: InteractiveModel, width: number, hasTranscript: b
   const inputLines = wrapForRender(inputBody, width - 10);
 
   const rendered = [
+    {
+      backgroundColor: "#25282d",
+      text: " ".repeat(width)
+    },
     ...inputLines.map((line, index) => ({
       backgroundColor: "#25282d",
       color: state.input.length > 0 ? "#f5f5f5" : "#9aa1a8",
       text: `    ${padLine(index === inputLines.length - 1 ? `${line}${state.input.length > 0 ? "█" : ""}` : line, width - 8)}    `
     })),
+    {
+      backgroundColor: "#25282d",
+      text: " ".repeat(width)
+    },
     {
       dimColor: true,
       text: `${state.doctor?.model ?? state.profileName ?? "model"} - ${estimateContextLeftPercent(
@@ -970,6 +997,31 @@ function firstNonEmptyLine(value: string | null | undefined): string | null {
     .split("\n")
     .map((line) => line.trim())
     .find((line) => line.length > 0) ?? null;
+}
+
+function shouldInsertPhaseSeparator(previous: TranscriptBlock, next: TranscriptBlock): boolean {
+  const previousPhase = blockPhase(previous);
+  const nextPhase = blockPhase(next);
+
+  return (
+    previousPhase !== null &&
+    nextPhase !== null &&
+    previousPhase !== nextPhase &&
+    ((previousPhase === "assistant" && nextPhase === "tooling") ||
+      (previousPhase === "tooling" && nextPhase === "assistant"))
+  );
+}
+
+function blockPhase(block: TranscriptBlock): "assistant" | "tooling" | null {
+  if (block.kind === "assistant") {
+    return "assistant";
+  }
+
+  if (block.kind === "activity" || block.kind === "approval") {
+    return "tooling";
+  }
+
+  return null;
 }
 
 function appendSettledAssistantMessage(

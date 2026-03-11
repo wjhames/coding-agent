@@ -1,8 +1,17 @@
+export interface MarkdownRenderSpan {
+  backgroundColor?: string | undefined;
+  bold?: boolean | undefined;
+  color?: string | undefined;
+  dimColor?: boolean | undefined;
+  text: string;
+}
+
 export interface MarkdownRenderLine {
   backgroundColor?: string | undefined;
   bold?: boolean | undefined;
   color?: string | undefined;
   dimColor?: boolean | undefined;
+  segments?: MarkdownRenderSpan[] | undefined;
   text: string;
 }
 
@@ -66,12 +75,8 @@ export function renderFinalMarkdown(text: string, width: number): MarkdownRender
       if (output.length > 0 && output.at(-1)?.text.trim().length !== 0) {
         pushBlankLine(output);
       }
-      output.push(
-        ...wrapForRender(headingMatch[2] ?? "", width).map((item) => ({
-          bold: true,
-          text: item
-        }))
-      );
+      output.push(...wrapInlineTokens([{ bold: true, text: headingMatch[2] ?? "" }], width));
+      pushBlankLine(output);
       continue;
     }
 
@@ -83,7 +88,7 @@ export function renderFinalMarkdown(text: string, width: number): MarkdownRender
 
     const bulletMatch = line.match(/^(\s*)([-*])\s+(.*)$/);
     if (bulletMatch) {
-      output.push(...renderPrefixedLine(bulletMatch[3] ?? "", width, `${bulletMatch[2]} `, "  "));
+      output.push(...renderPrefixedLine(bulletMatch[3] ?? "", width, "• ", "  "));
       continue;
     }
 
@@ -138,10 +143,10 @@ function renderStreamingLine(
   if (headingMatch) {
     return {
       inCodeFence: false,
-      lines: wrapForRender(headingMatch[2] ?? "", width).map((item) => ({
-        bold: true,
-        text: item
-      }))
+      lines: [
+        ...wrapInlineTokens([{ bold: true, text: headingMatch[2] ?? "" }], width),
+        { text: BLANK_RENDER_LINE }
+      ]
     };
   }
 
@@ -157,7 +162,7 @@ function renderStreamingLine(
   if (bulletMatch) {
     return {
       inCodeFence: false,
-      lines: renderPrefixedLine(bulletMatch[3] ?? "", width, `${bulletMatch[2]} `, "  ")
+      lines: renderPrefixedLine(bulletMatch[3] ?? "", width, "• ", "  ")
     };
   }
 
@@ -181,16 +186,23 @@ function renderParagraphLine(
   width: number,
   stable = true
 ): MarkdownRenderLine[] {
-  const normalized = stable ? normalizeInlineMarkdown(line) : line;
-  return wrapForRender(normalized, width).map((item) => ({
-    text: item
-  }));
+  const tokens = stable ? tokenizeInlineMarkdown(line) : [{ text: line }];
+  return wrapInlineTokens(tokens, width);
 }
 
 function renderQuoteLine(text: string, width: number): MarkdownRenderLine[] {
-  return wrapForRender(text, Math.max(8, width - 2)).map((item) => ({
-    dimColor: true,
-    text: `> ${item}`
+  return wrapInlineTokens(tokenizeInlineMarkdown(text), Math.max(8, width - 2), {
+    firstPrefix: {
+      dimColor: true,
+      text: "> "
+    },
+    restPrefix: {
+      dimColor: true,
+      text: "> "
+    }
+  }).map((line) => ({
+    ...line,
+    dimColor: true
   }));
 }
 
@@ -207,24 +219,10 @@ function renderPrefixedLine(
   firstPrefix: string,
   restPrefix: string
 ): MarkdownRenderLine[] {
-  const firstWidth = Math.max(8, width - firstPrefix.length);
-  const restWidth = Math.max(8, width - restPrefix.length);
-  const wrapped = wrapForRender(text, firstWidth);
-  const output: MarkdownRenderLine[] = [];
-
-  wrapped.forEach((line, index) => {
-    const prefix = index === 0 ? firstPrefix : restPrefix;
-    const available = index === 0 ? firstWidth : restWidth;
-    const chunks = index === 0 ? [line] : wrapForRender(line, available);
-
-    chunks.forEach((chunk) => {
-      output.push({
-        text: `${prefix}${chunk}`
-      });
-    });
+  return wrapInlineTokens(tokenizeInlineMarkdown(text), width, {
+    firstPrefix: { text: firstPrefix },
+    restPrefix: { text: restPrefix }
   });
-
-  return output;
 }
 
 function codeFenceDivider(width: number): MarkdownRenderLine {
@@ -234,14 +232,191 @@ function codeFenceDivider(width: number): MarkdownRenderLine {
   };
 }
 
-function normalizeInlineMarkdown(line: string): string {
-  return line
-    .replace(/\*\*(.*?)\*\*/g, "$1")
-    .replace(/__(.*?)__/g, "$1")
-    .replace(/\*(.*?)\*/g, "$1")
-    .replace(/_(.*?)_/g, "$1")
-    .replace(/`([^`]+)`/g, "$1")
-    .replace(/\[([^\]]+)\]\(([^)]+)\)/g, "$1 ($2)");
+function tokenizeInlineMarkdown(line: string): MarkdownRenderSpan[] {
+  const tokens: MarkdownRenderSpan[] = [];
+  let index = 0;
+
+  const pushText = (text: string, style?: Omit<MarkdownRenderSpan, "text">) => {
+    if (text.length === 0) {
+      return;
+    }
+
+    const previous = tokens.at(-1);
+    if (
+      previous &&
+      previous.bold === style?.bold &&
+      previous.color === style?.color &&
+      previous.dimColor === style?.dimColor &&
+      previous.backgroundColor === style?.backgroundColor
+    ) {
+      previous.text += text;
+      return;
+    }
+
+    tokens.push({
+      ...style,
+      text
+    });
+  };
+
+  while (index < line.length) {
+    const slice = line.slice(index);
+    const linkMatch = slice.match(/^\[([^\]]+)\]\(([^)]+)\)/);
+    if (linkMatch) {
+      pushText(linkMatch[1] ?? "");
+      pushText(` (${linkMatch[2]})`, {
+        dimColor: true
+      });
+      index += linkMatch[0].length;
+      continue;
+    }
+
+    if (slice.startsWith("**")) {
+      const close = line.indexOf("**", index + 2);
+      if (close !== -1) {
+        pushText(line.slice(index + 2, close), { bold: true });
+        index = close + 2;
+        continue;
+      }
+    }
+
+    if (slice.startsWith("__")) {
+      const close = line.indexOf("__", index + 2);
+      if (close !== -1) {
+        pushText(line.slice(index + 2, close), { bold: true });
+        index = close + 2;
+        continue;
+      }
+    }
+
+    if (slice.startsWith("`")) {
+      const close = line.indexOf("`", index + 1);
+      if (close !== -1) {
+        pushText(line.slice(index + 1, close), {
+          backgroundColor: "#2b2f36",
+          color: "#ffd479"
+        });
+        index = close + 1;
+        continue;
+      }
+    }
+
+    pushText(line[index] ?? "");
+    index += 1;
+  }
+
+  return tokens.length > 0 ? tokens : [{ text: line }];
+}
+
+function wrapInlineTokens(
+  tokens: MarkdownRenderSpan[],
+  width: number,
+  prefixes?: {
+    firstPrefix: MarkdownRenderSpan;
+    restPrefix: MarkdownRenderSpan;
+  }
+): MarkdownRenderLine[] {
+  const firstPrefix = prefixes?.firstPrefix;
+  const restPrefix = prefixes?.restPrefix ?? firstPrefix;
+  const lines: MarkdownRenderLine[] = [];
+  let current = firstPrefix ? [cloneSpan(firstPrefix)] : [];
+  let currentLength = firstPrefix?.text.length ?? 0;
+  let isFirstLine = true;
+
+  const pushCurrent = () => {
+    lines.push(buildLine(current));
+    current = restPrefix ? [cloneSpan(restPrefix)] : [];
+    currentLength = restPrefix?.text.length ?? 0;
+    isFirstLine = false;
+  };
+
+  for (const token of tokens) {
+    for (const part of splitPreservingWhitespace(token.text)) {
+      if (part.length === 0) {
+        continue;
+      }
+
+      let remaining = part;
+      while (remaining.length > 0) {
+        const available = Math.max(1, width - currentLength);
+        const whitespaceOnly = /^\s+$/.test(remaining);
+
+        if (whitespaceOnly && currentLength === (isFirstLine ? firstPrefix?.text.length ?? 0 : restPrefix?.text.length ?? 0)) {
+          remaining = "";
+          continue;
+        }
+
+        if (remaining.length <= available) {
+          appendSpan(current, {
+            ...token,
+            text: remaining
+          });
+          currentLength += remaining.length;
+          remaining = "";
+          continue;
+        }
+
+        if (whitespaceOnly) {
+          pushCurrent();
+          remaining = "";
+          continue;
+        }
+
+        if (currentLength > (isFirstLine ? firstPrefix?.text.length ?? 0 : restPrefix?.text.length ?? 0)) {
+          pushCurrent();
+          continue;
+        }
+
+        appendSpan(current, {
+          ...token,
+          text: remaining.slice(0, available)
+        });
+        currentLength += available;
+        remaining = remaining.slice(available);
+        if (remaining.length > 0) {
+          pushCurrent();
+        }
+      }
+    }
+  }
+
+  lines.push(buildLine(current));
+  return lines;
+}
+
+function splitPreservingWhitespace(text: string): string[] {
+  return text.split(/(\s+)/).filter((part) => part.length > 0);
+}
+
+function appendSpan(target: MarkdownRenderSpan[], next: MarkdownRenderSpan): void {
+  if (next.text.length === 0) {
+    return;
+  }
+
+  const previous = target.at(-1);
+  if (
+    previous &&
+    previous.bold === next.bold &&
+    previous.color === next.color &&
+    previous.dimColor === next.dimColor &&
+    previous.backgroundColor === next.backgroundColor
+  ) {
+    previous.text += next.text;
+    return;
+  }
+
+  target.push(next);
+}
+
+function buildLine(segments: MarkdownRenderSpan[]): MarkdownRenderLine {
+  return {
+    segments,
+    text: segments.map((segment) => segment.text).join("")
+  };
+}
+
+function cloneSpan(span: MarkdownRenderSpan): MarkdownRenderSpan {
+  return { ...span };
 }
 
 function wrapForRender(text: string, width: number): string[] {
