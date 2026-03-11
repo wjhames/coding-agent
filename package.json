@@ -2,6 +2,7 @@
   "name": "coding-agent",
   "version": "0.1.0",
   "description": "CLI coding agent",
+  "license": "MIT",
   "type": "module",
   "bin": {
     "coding-agent": "./dist/cli/main.js"
