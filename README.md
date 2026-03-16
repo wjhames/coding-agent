@@ -42,12 +42,12 @@ This project explores what makes a CLI coding agent useful in practice:
 
 The runtime is the center of the project.
 
-- `src/app/exec.ts`
-  - task execution loop, tool orchestration, approvals, verification, persistence
+- `src/execution/`
+  - task execution engine, state management, prompt policy, model loop, verification cycle
 - `src/runtime/api.ts`
   - shared entrypoints for CLI and interactive mode
 - `src/session/`
-  - session snapshots plus append-only event logs
+  - event constructors, aggregate reduction, session snapshots, append-only event logs
 
 ### Tool Layer
 
@@ -81,6 +81,15 @@ The UI is an Ink client over the runtime.
 - queued prompts during active runs
 - app-managed scroll
 - progressive markdown rendering for streamed and completed responses
+
+The interactive code is split by responsibility:
+
+- `src/interactive/state.ts`
+  - persistent UI state and input helpers
+- `src/interactive/reducer.ts`
+  - runtime-event and command-result state transitions
+- `src/interactive/render.ts`
+  - transcript rendering, viewport math, and terminal formatting
 
 ## Features
 
@@ -218,11 +227,12 @@ npm run smoke:pause-resume
 ```text
 src/cli/           command parsing and CLI entrypoints
 src/runtime/       shared runtime contracts and API
-src/app/           execution loop, approvals, verification, context
+src/execution/     task engine, model loop, prompt policy, verification flow
+src/app/           domain helpers for approvals, context, memory, shell, verification
 src/tools/         file, search, patch, and shell tools
-src/llm/           OpenAI-compatible client and tool loop
-src/session/       snapshots, event logs, reducers
-src/interactive/   Ink UI, transcript model, markdown rendering
+src/llm/           OpenAI-compatible transport, stream parsing, and tool loop
+src/session/       session aggregate, event logs, snapshots
+src/interactive/   Ink UI, UI state reducer, transcript rendering, markdown rendering
 tests/unit/        unit and regression coverage
 scripts/           smoke test helpers
 ```
