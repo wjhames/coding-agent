@@ -1,6 +1,6 @@
 import { access, readFile, readdir, stat } from "node:fs/promises";
 import { join } from "node:path";
-import type { RepoContextSummary } from "../cli/output.js";
+import type { RepoContextSummary } from "../runtime/contracts.js";
 
 export interface RepoContext extends RepoContextSummary {
   packageScripts: Record<string, string>;

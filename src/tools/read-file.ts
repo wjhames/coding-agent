@@ -1,6 +1,6 @@
 import { z } from "zod";
-import type { Observation } from "../cli/output.js";
-import type { LlmTool } from "../llm/openai.js";
+import type { Observation } from "../runtime/contracts.js";
+import type { LlmTool } from "../llm/openai-client.js";
 import { readWorkspaceTextFile, toWorkspaceRelativePath } from "./workspace.js";
 
 const readFileInputSchema = z.object({

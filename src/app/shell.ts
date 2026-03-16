@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import type { Observation, VerificationRun } from "../cli/output.js";
+import type { Observation, VerificationRun } from "../runtime/contracts.js";
 
 export interface ShellExecutionResult {
   exitCode: number;

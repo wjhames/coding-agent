@@ -1,5 +1,5 @@
 import { executeShellCommand, shellResultToVerificationRun } from "./shell.js";
-import type { VerificationSummary } from "../cli/output.js";
+import type { VerificationSummary } from "../runtime/contracts.js";
 
 export async function runVerificationCommands(args: {
   commands: string[];

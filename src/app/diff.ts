@@ -2,7 +2,7 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import { dirname, join } from "node:path";
 import { spawn } from "node:child_process";
-import type { Artifact } from "../cli/output.js";
+import type { Artifact } from "../runtime/contracts.js";
 
 export async function createDiffArtifact(args: {
   after: string | null;

@@ -3,9 +3,9 @@ import { dirname } from "node:path";
 import { z } from "zod";
 import { classifyPatchAction, enforceApproval } from "../app/approval.js";
 import { createDiffArtifact, readMaybeFile } from "../app/diff.js";
-import type { Approval, Artifact, Observation } from "../cli/output.js";
 import type { ResolvedExecutionConfig } from "../config/load.js";
-import type { LlmTool } from "../llm/openai.js";
+import type { Approval, Artifact, Observation } from "../runtime/contracts.js";
+import type { LlmTool } from "../llm/openai-client.js";
 import { resolveWorkspacePath, toWorkspaceRelativePath } from "./workspace.js";
 
 export const patchOperationSchema = z.discriminatedUnion("type", [

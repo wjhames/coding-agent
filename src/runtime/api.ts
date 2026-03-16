@@ -1,8 +1,7 @@
 import type { ParsedOptions } from "../cli/parse.js";
 import type { CommandResult, RuntimeObserver } from "./contracts.js";
 import { loadConfig, resolveExecutionConfig, resolveLlmConfig } from "../config/load.js";
-import { runExec } from "../app/exec.js";
-import { runResume } from "../app/resume.js";
+import { runExec, runResume } from "../execution/engine.js";
 import { listRecentSessions, loadSession } from "../session/store.js";
 
 export interface RuntimeEnvironment {

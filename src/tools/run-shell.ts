@@ -11,9 +11,9 @@ import {
 import { executeShellCommand, shellResultToObservation } from "../app/shell.js";
 import { diffWorkspaceSnapshots, snapshotWorkspace } from "../app/workspace-state.js";
 import { createDiffArtifact } from "../app/diff.js";
-import type { Approval, Artifact, Observation } from "../cli/output.js";
 import type { ResolvedExecutionConfig } from "../config/load.js";
-import type { LlmTool } from "../llm/openai.js";
+import type { Approval, Artifact, Observation } from "../runtime/contracts.js";
+import type { LlmTool } from "../llm/openai-client.js";
 
 const runShellInputSchema = z.object({
   command: z.string().min(1),

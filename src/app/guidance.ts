@@ -1,6 +1,6 @@
 import { readFile, stat } from "node:fs/promises";
 import { join } from "node:path";
-import type { GuidanceSummary } from "../cli/output.js";
+import type { GuidanceSummary } from "../runtime/contracts.js";
 import { getAgentHome } from "../session/paths.js";
 
 export interface GuidanceLayer {

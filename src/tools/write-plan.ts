@@ -1,6 +1,6 @@
 import { z } from "zod";
-import type { PlanState } from "../cli/output.js";
-import type { LlmTool } from "../llm/openai.js";
+import type { PlanState } from "../runtime/contracts.js";
+import type { LlmTool } from "../llm/openai-client.js";
 
 const planInputSchema = z.object({
   items: z

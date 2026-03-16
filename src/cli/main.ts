@@ -4,7 +4,7 @@ import { pathToFileURL } from "node:url";
 import process from "node:process";
 import { ApprovalDeniedError } from "../app/approval.js";
 import { ConfigError } from "../config/load.js";
-import { LlmError } from "../llm/openai.js";
+import { LlmError } from "../llm/openai-client.js";
 import { SessionStoreError } from "../session/store.js";
 import { listSessions, resumeTask, runDoctor, startTask } from "../runtime/api.js";
 import { runInteractiveApp } from "../interactive/app.js";

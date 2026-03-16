@@ -1,6 +1,6 @@
 import type { LoadedGuidance } from "./guidance.js";
 import type { RepoContext } from "./context.js";
-import type { CompactionSummary, MemorySummary, PlanState } from "../cli/output.js";
+import type { CompactionSummary, MemorySummary, PlanState } from "../runtime/contracts.js";
 
 const MAX_CONTEXT_CHARS = 16_000;
 const SECTION_BUDGET = {

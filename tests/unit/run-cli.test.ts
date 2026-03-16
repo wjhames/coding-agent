@@ -283,6 +283,18 @@ describe("runCli", () => {
     expect(io.stdout).toContain("Interactive mode requires a TTY.");
   });
 
+  it("rejects json mode for interactive runs", async () => {
+    const io = createMemoryIo();
+    const exitCode = await runCli(["--json"], io.streams, {});
+
+    expect(exitCode).toBe(1);
+    expect(JSON.parse(io.stderr)).toEqual({
+      error: "json_not_supported",
+      message: "`--json` is only supported for non-interactive commands.",
+      exitCode: 1
+    });
+  });
+
   it("pauses on apply_patch under prompt policy and resumes with auto approval", async () => {
     const cwd = await makeWorkspace();
     const homeDir = await makeHomeDir();

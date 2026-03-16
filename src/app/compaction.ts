@@ -1,4 +1,4 @@
-import type { CompactionSummary, VerificationSummary } from "../cli/output.js";
+import type { CompactionSummary, VerificationSummary } from "../runtime/contracts.js";
 import type { SessionEvent } from "../session/events.js";
 
 export function deriveCompaction(args: {

@@ -175,6 +175,37 @@ describe("action tools", () => {
       })
     ).resolves.toContain("\"exitCode\":0");
   });
+
+  it("fails patch deletes when the target file is missing", async () => {
+    const cwd = await makeWorkspace();
+    const tool = createApplyPatchTool({
+      addApproval: () => undefined,
+      addArtifacts: () => undefined,
+      addChangedFiles: () => undefined,
+      addObservation: () => undefined,
+      config: {
+        approvalPolicy: "auto",
+        baseUrl: "http://localhost:1234/v1",
+        maxSteps: 8,
+        model: "gpt-4.1-mini",
+        networkEgress: false,
+        profileName: "local",
+        timeout: undefined
+      },
+      cwd
+    });
+
+    await expect(
+      tool.run({
+        operations: [
+          {
+            type: "delete",
+            path: "src/missing.ts"
+          }
+        ]
+      })
+    ).rejects.toThrow("Cannot delete missing file `src/missing.ts`.");
+  });
 });
 
 async function makeWorkspace(): Promise<string> {

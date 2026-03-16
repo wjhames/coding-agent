@@ -6,7 +6,7 @@ import type {
   Observation,
   PlanState,
   VerificationSummary
-} from "../cli/output.js";
+} from "../runtime/contracts.js";
 
 export function deriveMemory(args: {
   approvals: Approval[];
