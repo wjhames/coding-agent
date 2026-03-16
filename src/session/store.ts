@@ -1,31 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { readdir, readFile, writeFile } from "node:fs/promises";
 import { basename } from "node:path";
-import { z } from "zod";
-import {
-  approvalSchema,
-  artifactSchema,
-  compactionSummarySchema,
-  guidanceSummarySchema,
-  memorySummarySchema,
-  observationSchema,
-  pendingActionSchema,
-  planStateSchema,
-  repoContextSchema,
-  sessionConfigSchema,
-  sessionModeSchema,
-  sessionStatusSchema,
-  type Approval,
-  type Artifact,
-  type CompactionSummary,
-  type GuidanceSummary,
-  type MemorySummary,
-  type Observation,
-  type PlanState,
-  type RepoContextSummary,
-  type VerificationSummary,
-  verificationSchema
-} from "../runtime/contracts.js";
 import {
   appendSessionEvents,
   createSessionCompletedEvent,
@@ -34,66 +9,21 @@ import {
   createSessionStartedEvent,
   createSummaryUpdatedEvent,
   loadSessionEvents,
-  reduceSessionEvents,
   type SessionEvent
 } from "./events.js";
+import {
+  createSessionRecord,
+  emptyGuidanceSummary,
+  reduceSessionEvents,
+  sessionRecordSchema,
+  type CreateSessionInput,
+  type SessionMode,
+  type SessionRecord,
+  type SessionStatus
+} from "./aggregate.js";
 import { ensureSessionRoot, getSessionFilePath, getSessionRoot } from "./paths.js";
 
-export const sessionRecordSchema = z
-  .object({
-    approvals: z.array(approvalSchema),
-    artifacts: z.array(artifactSchema),
-    changedFiles: z.array(z.string()),
-    compaction: compactionSummarySchema,
-    config: sessionConfigSchema,
-    createdAt: z.string(),
-    cwd: z.string(),
-    eventCount: z.number().int().nonnegative(),
-    guidance: guidanceSummarySchema,
-    id: z.string(),
-    lastEventAt: z.string().nullable(),
-    memory: memorySummarySchema,
-    mode: sessionModeSchema,
-    nextActions: z.array(z.string()),
-    observations: z.array(observationSchema),
-    pendingAction: pendingActionSchema.nullable(),
-    plan: planStateSchema.nullable(),
-    prompt: z.string(),
-    repoContext: repoContextSchema,
-    status: sessionStatusSchema,
-    summary: z.string(),
-    updatedAt: z.string(),
-    verification: verificationSchema
-  })
-  .strict();
-
-export type SessionStatus = z.infer<typeof sessionStatusSchema>;
-export type SessionMode = z.infer<typeof sessionModeSchema>;
-export type SessionRecord = z.infer<typeof sessionRecordSchema>;
-
-export interface CreateSessionInput {
-  approvals?: Approval[];
-  artifacts?: Artifact[];
-  changedFiles?: string[];
-  compaction?: CompactionSummary;
-  config: SessionRecord["config"];
-  cwd: string;
-  eventCount?: number;
-  guidance?: GuidanceSummary;
-  mode: SessionMode;
-  lastEventAt?: string | null;
-  memory?: MemorySummary;
-  nextActions?: string[];
-  observations?: Observation[];
-  pendingAction?: SessionRecord["pendingAction"];
-  plan?: PlanState | null;
-  prompt: string;
-  repoContext: RepoContextSummary;
-  status: SessionStatus;
-  summary: string;
-  verification?: VerificationSummary;
-  events?: SessionEvent[];
-}
+export { sessionRecordSchema, type CreateSessionInput, type SessionMode, type SessionRecord, type SessionStatus } from "./aggregate.js";
 
 export class SessionStoreError extends Error {}
 
@@ -101,55 +31,11 @@ export async function createSession(
   input: CreateSessionInput,
   homeDir?: string
 ): Promise<SessionRecord> {
-  const now = new Date().toISOString();
   const sessionId = randomUUID();
-  const session: SessionRecord = {
-    approvals: input.approvals ?? [],
-    artifacts: input.artifacts ?? [],
-    changedFiles: input.changedFiles ?? [],
-    compaction: input.compaction ?? {
-      changedFilesSummary: null,
-      eventSummary: null,
-      observationSummary: null,
-      verificationSummary: null
-    },
-    config: input.config,
-    createdAt: now,
-    cwd: input.cwd,
-    eventCount: input.eventCount ?? 0,
-    guidance: input.guidance ?? {
-      activeRules: [],
-      sources: []
-    },
+  const session = createSessionRecord({
     id: sessionId,
-    lastEventAt: input.lastEventAt ?? null,
-    memory: input.memory ?? {
-      artifacts: [],
-      decisions: [],
-      working: []
-    },
-    mode: input.mode,
-    nextActions: input.nextActions ?? [],
-    observations: input.observations ?? [],
-    pendingAction: input.pendingAction ?? null,
-    plan: input.plan ?? null,
-    prompt: input.prompt,
-    repoContext: input.repoContext,
-    status: input.status,
-    summary: input.summary,
-    updatedAt: now,
-    verification: input.verification ?? {
-      commands: [],
-      inferred: false,
-      notRunReason: null,
-      passed: false,
-      ran: false,
-      runs: [],
-      selectedCommands: [],
-      skippedCommands: [],
-      status: "not_run"
-    }
-  };
+    input
+  });
 
   const events =
     input.events === undefined
@@ -164,7 +50,7 @@ export async function createSession(
             createSessionStartedEvent({
               config: input.config,
               cwd: input.cwd,
-              guidance: session.guidance,
+              guidance: input.guidance ?? emptyGuidanceSummary(),
               id: sessionId,
               mode: input.mode,
               prompt: input.prompt,
@@ -194,7 +80,7 @@ export async function updateSession(
     cwd: string;
     mode: SessionMode;
     prompt: string;
-    repoContext: RepoContextSummary;
+    repoContext: SessionRecord["repoContext"];
     status: SessionStatus;
     summary: string;
   },
@@ -304,7 +190,7 @@ function defaultEventsForSession(args: {
     createSessionStartedEvent({
       config: args.input.config,
       cwd: args.input.cwd,
-      guidance: args.session.guidance,
+      guidance: args.input.guidance ?? emptyGuidanceSummary(),
       id: args.id,
       mode: args.input.mode,
       prompt: args.input.prompt,
