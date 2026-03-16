@@ -3,7 +3,7 @@ import { z } from "zod";
 import {
   createOpenAICompatibleClient,
   LlmError
-} from "../../../src/llm/openai.js";
+} from "../../../src/llm/openai-client.js";
 
 describe("createOpenAICompatibleClient", () => {
   it("streams assistant deltas from an event-stream response", async () => {
@@ -465,5 +465,78 @@ describe("createOpenAICompatibleClient", () => {
       role: "tool",
       tool_call_id: "call-1"
     });
+  });
+
+  it("reconstructs streamed tool calls across chunk boundaries", async () => {
+    const chunks = [
+      "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call-1\",\"function\":{\"name\":\"read_file\",\"arguments\":\"{\\\"path\\\":\\\"src/\"}}]}}]}\n\n",
+      "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\"config.ts\\\"}\"}}]}}]}\n\n",
+      "data: [DONE]\n\n"
+    ];
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(
+          new ReadableStream({
+            start(controller) {
+              for (const chunk of chunks) {
+                controller.enqueue(new TextEncoder().encode(chunk));
+              }
+              controller.close();
+            }
+          }),
+          {
+            status: 200,
+            headers: {
+              "content-type": "text/event-stream"
+            }
+          }
+        )
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            choices: [
+              {
+                message: {
+                  content: "Done."
+                }
+              }
+            ]
+          }),
+          {
+            status: 200,
+            headers: {
+              "content-type": "application/json"
+            }
+          }
+        )
+      );
+
+    const client = createOpenAICompatibleClient({
+      apiKey: "secret",
+      baseUrl: "http://localhost:1234/v1",
+      fetchImpl,
+      model: "gpt-4.1-mini"
+    });
+    const run = vi.fn().mockResolvedValue("{\"ok\":true}");
+
+    await expect(
+      client.runTools({
+        systemPrompt: "system",
+        tools: [
+          {
+            description: "Read a file.",
+            inputJsonSchema: { type: "object" },
+            inputSchema: z.object({ path: z.string() }),
+            name: "read_file",
+            run
+          }
+        ],
+        userPrompt: "user"
+      })
+    ).resolves.toEqual({ text: "Done." });
+
+    expect(run).toHaveBeenCalledWith({ path: "src/config.ts" });
   });
 });
