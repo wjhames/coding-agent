@@ -1,15 +1,16 @@
 import { describe, expect, it } from "vitest";
 import {
-  applyCommandResultToModel,
-  applyRuntimeEventToModel,
-  buildViewportLines,
   createInteractiveModel,
   enqueuePrompt,
-  estimateContextLeftPercent,
   insertInteractiveLineBreak,
-  reconcileViewportScroll,
   setInteractiveInput
-} from "../../src/interactive/model.js";
+} from "../../src/interactive/state.js";
+import { applyCommandResultToModel, applyRuntimeEventToModel } from "../../src/interactive/reducer.js";
+import {
+  buildViewportLines,
+  estimateContextLeftPercent,
+  reconcileViewportScroll
+} from "../../src/interactive/render.js";
 
 describe("interactive model", () => {
   it("starts with an inline composer and no transcript filler", () => {
@@ -593,4 +594,114 @@ describe("interactive model", () => {
 
     expect(estimateContextLeftPercent(model)).toBeGreaterThan(90);
   });
+
+  it("shows approval queue guidance when approval is pending and input is empty", () => {
+    const model = applyRuntimeEventToModel(
+      createInteractiveModel({
+        cwd: "/workspace/project",
+        doctor: null,
+        recentSessions: []
+      }),
+      {
+        approval: {
+          actionClass: "patch_write",
+          id: "approval-1",
+          reason: "file_write",
+          status: "pending",
+          summary: "Approval required to apply 1 patch operation(s).",
+          tool: "apply_patch"
+        },
+        at: "2026-03-10T10:00:00.000Z",
+        pendingAction: {
+          action: {
+            operations: [{ path: "src/config.ts", type: "replace" }]
+          },
+          approval: {
+            actionClass: "patch_write",
+            id: "approval-1",
+            reason: "file_write",
+            status: "pending",
+            summary: "Approval required to apply 1 patch operation(s).",
+            tool: "apply_patch"
+          },
+          tool: "apply_patch"
+        },
+        type: "approval_requested"
+      }
+    );
+
+    const lines = buildViewportLines({
+      columns: 100,
+      model,
+      rows: 20
+    }).map((line) => line.text);
+
+    expect(lines.some((line) => line.includes("Type to queue the next prompt"))).toBe(true);
+  });
+
+  it("does not duplicate the completion line on repeated completed results", () => {
+    const base = applyCommandResultToModel(
+      createInteractiveModel({
+        cwd: "/workspace/project",
+        doctor: null,
+        recentSessions: []
+      }),
+      completedResult()
+    );
+    const next = applyCommandResultToModel(base, completedResult());
+
+    expect(
+      next.blocks.filter((block) => block.kind === "system" && block.lines[0] === "Completed.")
+    ).toHaveLength(1);
+  });
 });
+
+function completedResult() {
+  return {
+    approvals: [],
+    artifacts: [],
+    changedFiles: [],
+    compaction: {
+      changedFilesSummary: null,
+      eventSummary: null,
+      observationSummary: null,
+      verificationSummary: null
+    },
+    eventCount: 0,
+    exitCode: 0 as const,
+    guidance: {
+      activeRules: [],
+      sources: []
+    },
+    lastEventAt: null,
+    memory: {
+      artifacts: [],
+      decisions: [],
+      working: []
+    },
+    nextActions: [],
+    observations: [],
+    pendingApproval: null,
+    plan: null,
+    repoContext: {
+      guidanceFiles: [],
+      isGitRepo: true,
+      topLevelEntries: []
+    },
+    resumeCommand: null,
+    sessionId: "session-1",
+    status: "completed" as const,
+    summary: "Done.",
+    verification: {
+      commands: [],
+      inferred: true,
+      notRunReason: "No file changes were made.",
+      passed: false,
+      ran: false,
+      runs: [],
+      selectedCommands: [],
+      skippedCommands: [],
+      status: "not_run" as const
+    }
+  };
+}

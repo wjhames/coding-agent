@@ -1,27 +1,26 @@
 import React, { startTransition, useEffect, useEffectEvent, useMemo, useRef, useState } from "react";
 import { Box, Text, useApp, useInput, useStdout } from "ink";
 import type { ParsedOptions } from "../cli/parse.js";
+import type { RuntimeEvent } from "../runtime/contracts.js";
 import type { RuntimeDoctor, RuntimeEnvironment } from "../runtime/api.js";
 import { approveTask, listSessions, resumeTask, startTask } from "../runtime/api.js";
 import type { SessionRecord } from "../session/store.js";
 import {
   appendInteractiveInput,
-  applyCommandResultToModel,
-  applyRuntimeEventToModel,
   beginPromptRun,
-  buildViewportLines,
   createInteractiveModel,
   enqueuePrompt,
   insertInteractiveLineBreak,
   nextQueuedPrompt,
-  reconcileViewportScroll,
   refreshRecentSessions,
   scrollInteractiveViewport,
   setInteractiveInput,
   toggleApprovalChoice,
   trimInteractiveInput,
   type InteractiveModel
-} from "./model.js";
+} from "./state.js";
+import { applyCommandResultToModel, applyRuntimeEventToModel } from "./reducer.js";
+import { buildViewportLines, reconcileViewportScroll } from "./render.js";
 
 interface InteractiveExit {
   code: number;
@@ -117,7 +116,7 @@ export function InteractiveApp(props: {
     runActiveRef.current = true;
     updateModel((current) => beginPromptRun(current, promptId));
     const observer = {
-      onEvent(event: import("../cli/output.js").RuntimeEvent) {
+      onEvent(event: RuntimeEvent) {
         updateModel((current) => applyRuntimeEventToModel(current, event));
       }
     };
@@ -153,7 +152,7 @@ export function InteractiveApp(props: {
       scrollOffset: 0
     }));
     const observer = {
-      onEvent(event: import("../cli/output.js").RuntimeEvent) {
+      onEvent(event: RuntimeEvent) {
         updateModel((current) => applyRuntimeEventToModel(current, event));
       }
     };
@@ -186,7 +185,7 @@ export function InteractiveApp(props: {
     }));
 
     const observer = {
-      onEvent(event: import("../cli/output.js").RuntimeEvent) {
+      onEvent(event: RuntimeEvent) {
         updateModel((current) => applyRuntimeEventToModel(current, event));
       }
     };
