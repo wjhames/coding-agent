@@ -3,7 +3,7 @@ import { Box, Text, useApp, useInput, useStdout } from "ink";
 import type { ParsedOptions } from "../cli/parse.js";
 import type { RuntimeEvent } from "../runtime/contracts.js";
 import type { RuntimeDoctor, RuntimeEnvironment } from "../runtime/api.js";
-import { approveTask, listSessions, resumeTask, startTask } from "../runtime/api.js";
+import { approveTask, continueTask, listSessions, resumeTask, startTask } from "../runtime/api.js";
 import type { SessionRecord } from "../session/store.js";
 import {
   appendInteractiveInput,
@@ -122,12 +122,22 @@ export function InteractiveApp(props: {
     };
 
     try {
-      const result = await startTask({
-        ...(props.runtime ? { environment: props.runtime } : {}),
-        observer,
-        options: props.options,
-        prompt
-      });
+      const currentSessionId = modelRef.current.sessionId;
+      const result =
+        currentSessionId && !modelRef.current.pendingApproval
+          ? await continueTask({
+              ...(props.runtime ? { environment: props.runtime } : {}),
+              observer,
+              options: props.options,
+              prompt,
+              sessionId: currentSessionId
+            })
+          : await startTask({
+              ...(props.runtime ? { environment: props.runtime } : {}),
+              observer,
+              options: props.options,
+              prompt
+            });
       await handleRunResult(result);
     } finally {
       runActiveRef.current = false;

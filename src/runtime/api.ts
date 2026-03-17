@@ -1,7 +1,7 @@
 import type { ParsedOptions } from "../cli/parse.js";
 import type { CommandResult, RuntimeObserver } from "./contracts.js";
 import { loadConfig, resolveExecutionConfig, resolveLlmConfig } from "../config/load.js";
-import { runExec, runResume } from "../execution/engine.js";
+import { runContinue, runExec, runResume } from "../execution/engine.js";
 import { listRecentSessions, loadSession } from "../session/store.js";
 
 export interface RuntimeEnvironment {
@@ -70,6 +70,23 @@ export async function approveTask(args: {
       ...args.options,
       approvalPolicy: args.decision === "approve" ? "auto" : "never"
     },
+    sessionHomeDir: args.environment?.sessionHomeDir,
+    sessionId: args.sessionId
+  });
+}
+
+export async function continueTask(args: {
+  environment?: RuntimeEnvironment;
+  observer: RuntimeObserver | undefined;
+  options: ParsedOptions;
+  prompt: string;
+  sessionId: string;
+}): Promise<CommandResult | null> {
+  return runContinue({
+    fetchImpl: args.environment?.fetchImpl,
+    observer: args.observer,
+    options: args.options,
+    prompt: args.prompt,
     sessionHomeDir: args.environment?.sessionHomeDir,
     sessionId: args.sessionId
   });

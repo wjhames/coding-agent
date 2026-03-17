@@ -6,7 +6,6 @@ import {
 import type { PendingApprovalInfo } from "../runtime/contracts.js";
 import type { BlockTone, InteractiveModel, TranscriptBlock } from "./state.js";
 
-const CONTEXT_BUDGET_CHARS = 18_000;
 const BLANK_RENDER_LINE = " ";
 const LIVE_EDGE_BOTTOM_ALIGN_THRESHOLD = 0.75;
 
@@ -53,15 +52,14 @@ export function reconcileViewportScroll(
   };
 }
 
-export function estimateContextLeftPercent(state: InteractiveModel): number {
-  const used = [
-    state.blocks.flatMap((block) => block.lines).join("\n"),
-    state.input,
-    state.plan?.summary ?? "",
-    state.verification?.runs.map((run) => run.command).join("\n") ?? ""
-  ].join("\n").length;
+export function describeContextBudget(state: InteractiveModel): string {
+  const budget = state.context?.budget;
 
-  return Math.max(1, Math.min(99, Math.round((1 - used / CONTEXT_BUDGET_CHARS) * 100)));
+  if (!budget || budget.contextWindowTokens === null || budget.usedPercent === null) {
+    return "context window unknown";
+  }
+
+  return `${Math.max(0, 100 - budget.usedPercent)}% request budget left`;
 }
 
 function buildFullRenderLines(model: InteractiveModel, width: number): RenderLine[] {
@@ -240,9 +238,9 @@ function renderComposer(state: InteractiveModel, width: number, hasTranscript: b
     },
     {
       dimColor: true,
-      text: `${state.doctor?.model ?? state.profileName ?? "model"} - ${estimateContextLeftPercent(
+      text: `${state.doctor?.model ?? state.profileName ?? "model"} - ${describeContextBudget(
         state
-      )}% context left - ${state.cwd}`
+      )} - ${state.cwd}`
     }
   ];
 

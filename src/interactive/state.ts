@@ -1,6 +1,7 @@
 import type {
   Approval,
   Artifact,
+  ContextSnapshot,
   PendingApprovalInfo,
   PlanState,
   VerificationSummary
@@ -32,6 +33,7 @@ export interface InteractiveModel {
   artifacts: Artifact[];
   blocks: TranscriptBlock[];
   changedFiles: string[];
+  context: ContextSnapshot | null;
   cwd: string;
   doctor: RuntimeDoctor | null;
   input: string;
@@ -70,6 +72,7 @@ export function createInteractiveModel(args: {
     artifacts: [],
     blocks: [],
     changedFiles: [],
+    context: null,
     cwd: args.cwd,
     doctor: args.doctor,
     input: "",

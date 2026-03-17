@@ -17,7 +17,10 @@ export function applyRuntimeEventToModel(
     case "status":
       return applyStatusEvent(state, event);
     case "context_updated":
-      return state;
+      return {
+        ...state,
+        context: event.context
+      };
     case "plan_updated":
       return event.plan
         ? appendActivity(
@@ -141,6 +144,7 @@ export function applyCommandResultToModel(
     approvals: result.approvals,
     artifacts: result.artifacts,
     changedFiles: result.changedFiles,
+    context: result.context,
     liveStatusLabel: null,
     pendingApproval: result.pendingApproval,
     plan: result.plan,

@@ -50,7 +50,8 @@ export async function runExec(args: {
     options: args.options,
     prompt: args.prompt,
     recordPromptTurn: true,
-    sessionHomeDir: args.sessionHomeDir
+    sessionHomeDir: args.sessionHomeDir,
+    sessionPrompt: args.prompt
   });
 }
 
@@ -82,6 +83,53 @@ export async function runResume(args: {
     options: args.options,
     session,
     sessionHomeDir: args.sessionHomeDir
+  });
+
+  return {
+    ...result,
+    resumedFrom: session.id
+  };
+}
+
+export async function runContinue(args: {
+  fetchImpl: typeof fetch | undefined;
+  observer: RuntimeObserver | undefined;
+  options: ParsedOptions;
+  prompt: string;
+  sessionHomeDir: string | undefined;
+  sessionId: string;
+}): Promise<CommandResult | null> {
+  const session = await loadSession(args.sessionId, args.sessionHomeDir);
+
+  if (!session) {
+    return null;
+  }
+
+  const state = createExecutionState({
+    approvals: session.state.approvals,
+    artifacts: session.state.artifacts,
+    changedFiles: session.state.changedFiles,
+    context: session.context,
+    guidance: session.guidance,
+    observations: session.state.observations,
+    pendingAction: session.state.pendingAction,
+    plan: session.state.plan,
+    turns: session.turns,
+    verification: session.state.verification
+  });
+  recordUserTurn(state, args.prompt);
+
+  const result = await executeTask({
+    cwd: session.cwd,
+    existingSession: session,
+    fetchImpl: args.fetchImpl,
+    observer: args.observer,
+    options: args.options,
+    prompt: args.prompt,
+    recordPromptTurn: false,
+    sessionHomeDir: args.sessionHomeDir,
+    sessionPrompt: session.prompt,
+    state
   });
 
   return {
@@ -174,6 +222,7 @@ async function continueExec(args: {
     prompt: args.session.prompt,
     recordPromptTurn: false,
     sessionHomeDir: args.sessionHomeDir,
+    sessionPrompt: args.session.prompt,
     state
   });
 }
@@ -187,6 +236,7 @@ async function executeTask(args: {
   prompt: string;
   recordPromptTurn: boolean;
   sessionHomeDir: string | undefined;
+  sessionPrompt: string;
   state?: ExecutionState;
 }): Promise<CommandResult> {
   const config = await loadConfig(args.sessionHomeDir);
@@ -298,7 +348,7 @@ async function executeTask(args: {
         cwd: args.cwd,
         guidance: state.guidance,
         mode: "exec",
-        prompt: args.prompt,
+        prompt: args.sessionPrompt,
         repoContext: repoContextSummary,
         state: toExecutionSnapshot(state),
         status,
@@ -339,7 +389,7 @@ async function executeTask(args: {
           cwd: args.cwd,
           guidance: state.guidance,
           mode: "exec",
-          prompt: args.prompt,
+          prompt: args.sessionPrompt,
           repoContext: repoContextSummary,
           state: toExecutionSnapshot(state),
           status: "paused",
@@ -377,7 +427,7 @@ async function executeTask(args: {
           cwd: args.cwd,
           guidance: state.guidance,
           mode: "exec",
-          prompt: args.prompt,
+          prompt: args.sessionPrompt,
           repoContext: repoContextSummary,
           state: toExecutionSnapshot(state),
           status: "failed",

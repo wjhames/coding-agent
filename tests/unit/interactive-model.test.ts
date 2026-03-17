@@ -8,7 +8,7 @@ import {
 import { applyCommandResultToModel, applyRuntimeEventToModel } from "../../src/interactive/reducer.js";
 import {
   buildViewportLines,
-  estimateContextLeftPercent,
+  describeContextBudget,
   reconcileViewportScroll
 } from "../../src/interactive/render.js";
 
@@ -234,7 +234,7 @@ describe("interactive model", () => {
     const metadata = lines.at(-1)?.text ?? "";
 
     expect(metadata).toContain("gpt-4.1-mini");
-    expect(metadata).toContain("% context left");
+    expect(metadata).toContain("context window unknown");
     expect(metadata).toContain("/workspace/project");
     expect(metadata).not.toContain("status:");
     expect(metadata).not.toContain("agent:");
@@ -585,14 +585,45 @@ describe("interactive model", () => {
     expect(lines.some((line) => /^─{18,}$/.test(line.text))).toBe(true);
   });
 
-  it("estimates remaining context conservatively", () => {
+  it("describes request budget from the latest context snapshot", () => {
+    const model = applyRuntimeEventToModel(
+      createInteractiveModel({
+        cwd: "/workspace/project",
+        doctor: null,
+        recentSessions: []
+      }),
+      {
+        at: "2026-03-16T12:00:00.000Z",
+        context: {
+          budget: {
+            contextWindowTokens: 32_000,
+            droppedSections: [],
+            inputTokens: 8_000,
+            outputReserveTokens: 2_048,
+            remainingTokens: 21_952,
+            sections: [],
+            usedPercent: 27
+          },
+          historySummary: null,
+          recentTurnCount: 2,
+          snippets: [],
+          workingSet: []
+        },
+        type: "context_updated"
+      }
+    );
+
+    expect(describeContextBudget(model)).toBe("73% request budget left");
+  });
+
+  it("reports unknown request budget when the model window is not known", () => {
     const model = createInteractiveModel({
       cwd: "/workspace/project",
       doctor: null,
       recentSessions: []
     });
 
-    expect(estimateContextLeftPercent(model)).toBeGreaterThan(90);
+    expect(describeContextBudget(model)).toBe("context window unknown");
   });
 
   it("shows approval queue guidance when approval is pending and input is empty", () => {
