@@ -36,6 +36,34 @@ describe("interactive markdown", () => {
     expect(text).toContain("  const x = 1;");
   });
 
+  it("renders a table shell in streaming mode as soon as the header and separator are complete", () => {
+    const lines = renderStreamingMarkdown("| Name | Value |\n| --- | --- |\n", 80);
+    const text = lines.map((line) => line.text);
+
+    expect(text).toEqual(["| Name | Value |", "|------|-------|"]);
+  });
+
+  it("appends completed streaming rows while keeping the incomplete trailing row outside the table", () => {
+    const lines = renderStreamingMarkdown(
+      "| Name | Value |\n| --- | --- |\n| alpha | 1 |\npartial **tail",
+      80
+    );
+    const text = lines.map((line) => line.text);
+
+    expect(text).toContain("| alpha | 1     |");
+    expect(text.at(-1)).toBe("partial **tail");
+  });
+
+  it("keeps code fences from entering streaming table mode", () => {
+    const lines = renderStreamingMarkdown("```md\n| Name | Value |\n| --- | --- |\n", 80);
+    const text = lines.map((line) => line.text);
+
+    expect(text[0]).toMatch(/^─+$/);
+    expect(text).toContain("  | Name | Value |");
+    expect(text).toContain("  | --- | --- |");
+    expect(text).not.toContain("|------|-------|");
+  });
+
   it("renders inline bold and code as styled segments", () => {
     const lines = renderFinalMarkdown("Use **bold** and `code` here.", 60);
     const line = lines.find((item) => item.text.includes("Use bold and code here."));
