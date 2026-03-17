@@ -30,6 +30,7 @@ export interface ExecutionState {
   observations: Observation[];
   pendingAction: PendingAction | null;
   plan: PlanState | null;
+  turnChangedFiles: Set<string>;
   turns: TurnRecord[];
   verification: VerificationSummary;
 }
@@ -55,6 +56,7 @@ export function createExecutionState(source: {
     observations: source.observations ?? [],
     pendingAction: source.pendingAction ?? null,
     plan: source.plan ?? null,
+    turnChangedFiles: new Set<string>(),
     turns: source.turns ?? [],
     verification: source.verification ?? emptyVerificationSummary()
   };
@@ -76,6 +78,7 @@ export function toExecutionSnapshot(state: ExecutionState): ExecutionSnapshot {
 export function addChangedFiles(state: ExecutionState, files: string[]): void {
   for (const file of files) {
     state.changedFiles.add(file);
+    state.turnChangedFiles.add(file);
   }
 }
 
@@ -97,6 +100,14 @@ export function setContextSnapshot(state: ExecutionState, context: ContextSnapsh
 
 export function changedFilesList(state: ExecutionState): string[] {
   return normalizePaths([...state.changedFiles]);
+}
+
+export function turnChangedFilesList(state: ExecutionState): string[] {
+  return normalizePaths([...state.turnChangedFiles]);
+}
+
+export function resetTurnChangedFiles(state: ExecutionState): void {
+  state.turnChangedFiles.clear();
 }
 
 export function deriveNextActions(plan: PlanState | null): string[] {

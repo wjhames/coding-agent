@@ -28,6 +28,7 @@ import {
   recordSystemNote,
   recordToolResultTurn,
   recordUserTurn,
+  resetTurnChangedFiles,
   toExecutionSnapshot,
   toRepoContextSummary,
   type ExecutionState
@@ -290,6 +291,7 @@ async function executeTask(args: {
     selectedCommands: verificationCommands,
     skippedCommands: verificationPlan.skippedCommands
   };
+  resetTurnChangedFiles(state);
 
   if (args.recordPromptTurn) {
     recordUserTurn(state, args.prompt);

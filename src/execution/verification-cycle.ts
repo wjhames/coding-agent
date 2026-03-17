@@ -1,8 +1,8 @@
 import { runVerificationCommands } from "../app/verification-runner.js";
 import type { RuntimeObserver } from "../runtime/contracts.js";
 import {
-  changedFilesList,
   recordSystemNote,
+  turnChangedFilesList,
   type ExecutionState
 } from "./state.js";
 import { buildVerificationFailurePrompt } from "./prompts.js";
@@ -26,7 +26,7 @@ export async function runVerificationCycle(args: {
 }): Promise<{ summary: string }> {
   let summary = "";
 
-  if (changedFilesList(args.state).length > 0 && args.verificationCommands.length > 0) {
+  if (turnChangedFilesList(args.state).length > 0 && args.verificationCommands.length > 0) {
     args.state.verification = await runVerificationPass({
       commands: args.verificationCommands,
       cwd: args.cwd,
@@ -71,7 +71,7 @@ export async function runVerificationCycle(args: {
       commands: args.verificationCommands,
       inferred: true,
       notRunReason:
-        changedFilesList(args.state).length === 0
+        turnChangedFilesList(args.state).length === 0
           ? "No file changes were made."
           : "No verification commands were inferred.",
       passed: false,
