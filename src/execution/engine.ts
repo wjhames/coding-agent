@@ -17,6 +17,7 @@ import { resultFromSession } from "../session/mappers.js";
 import { createSession, listRecentSessions, loadSession, updateSession } from "../session/store.js";
 import { applyPatchOperations } from "../tools/apply-patch.js";
 import { runShellAction } from "../tools/run-shell.js";
+import { findCompletionFailureReason, sanitizeAssistantText } from "./completion.js";
 import {
   addObservation,
   addArtifacts,
@@ -250,7 +251,7 @@ async function executeTask(args: {
     config,
     executionConfig: resolvedConfig
   });
-  const repoContext = await collectRepoContext(args.cwd);
+  let repoContext = await collectRepoContext(args.cwd);
   const readOnlyTask = isLikelyReadOnlyTask(args.prompt);
   const guidance = await loadGuidance({
     cwd: args.cwd,
@@ -258,11 +259,11 @@ async function executeTask(args: {
     prompt: args.prompt,
     repoGuidanceFiles: repoContext.guidanceFiles
   });
-  const verificationPlan = planVerificationCommands({
+  let verificationPlan = planVerificationCommands({
     packageScripts: repoContext.packageScripts
   });
-  const verificationCommands = verificationPlan.commands;
-  const repoContextSummary = toRepoContextSummary(repoContext);
+  let verificationCommands = verificationPlan.commands;
+  let repoContextSummary = toRepoContextSummary(repoContext);
   const state =
     args.state ??
     createExecutionState({
@@ -321,6 +322,22 @@ async function executeTask(args: {
       verificationCommands
     });
 
+    if (state.changedFiles.size > 0) {
+      repoContext = await collectRepoContext(args.cwd);
+      repoContextSummary = toRepoContextSummary(repoContext);
+      verificationPlan = planVerificationCommands({
+        packageScripts: repoContext.packageScripts
+      });
+      verificationCommands = verificationPlan.commands;
+      state.verification = {
+        ...state.verification,
+        commands: verificationCommands,
+        inferred: true,
+        selectedCommands: verificationCommands,
+        skippedCommands: verificationPlan.skippedCommands
+      };
+    }
+
     const verificationResult = await runVerificationCycle({
       client,
       config: resolvedConfig,
@@ -337,11 +354,19 @@ async function executeTask(args: {
       summary = verificationResult.summary;
     }
 
-    const status = state.verification.status === "failed" ? "failed" : "completed";
-    const finalSummary = buildFinalSummary(summary, {
-      changedFiles: changedFilesList(state),
-      verification: state.verification
-    });
+    const sanitizedSummary = sanitizeAssistantText(summary);
+    const completionFailureReason = findCompletionFailureReason(sanitizedSummary);
+    const status =
+      state.verification.status === "failed" || completionFailureReason !== null ? "failed" : "completed";
+    const finalSummary = buildFinalSummary(
+      completionFailureReason
+        ? `${sanitizedSummary}\n\nIncomplete task: ${completionFailureReason}`
+        : sanitizedSummary,
+      {
+        changedFiles: changedFilesList(state),
+        verification: state.verification
+      }
+    );
     const persisted = await persistSession({
       existingSession: args.existingSession,
       input: {

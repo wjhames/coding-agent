@@ -23,6 +23,7 @@ import {
   recordToolResultTurn,
   type ExecutionState
 } from "./state.js";
+import { sanitizeAssistantText } from "./completion.js";
 import { buildSystemPrompt } from "./prompts.js";
 
 export async function runModelLoop(args: {
@@ -81,14 +82,15 @@ export async function runModelLoop(args: {
     tools
   });
 
-  recordAssistantTurn(args.state, toolResult.text);
+  const sanitizedText = sanitizeAssistantText(toolResult.text);
+  recordAssistantTurn(args.state, sanitizedText);
   emitRuntimeEvent(args.observer, {
     at: new Date().toISOString(),
-    text: toolResult.text,
+    text: sanitizedText,
     type: "assistant_message"
   });
 
-  return toolResult.text;
+  return sanitizedText;
 }
 
 export function emitRuntimeEvent(
