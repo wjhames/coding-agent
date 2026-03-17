@@ -74,14 +74,13 @@ export function applyRuntimeEventToModel(
         scrollOffset: state.scrollOffset
       };
     case "approval_resolved":
-      return appendSystemLine(
+      return appendApprovalResolutionFeedback(
         {
           ...state,
           liveStatusLabel: event.status === "approved" ? "Approval granted" : "Approval rejected",
           pendingApproval: null
         },
-        `Approval ${event.status}.`,
-        event.status === "approved" ? "success" : "warning"
+        event.status
       );
     case "verification_started":
       return appendActivity(state, {
@@ -228,6 +227,11 @@ function appendSystemLine(
   line: string,
   tone: BlockTone
 ): InteractiveModel {
+  const last = state.blocks.at(-1);
+  if (last?.kind === "system" && last.lines.length === 1 && last.lines[0] === line && last.tone === tone) {
+    return state;
+  }
+
   return {
     ...state,
     blocks: [
@@ -241,6 +245,21 @@ function appendSystemLine(
     ],
     scrollOffset: state.scrollOffset
   };
+}
+
+export function appendApprovalResolutionFeedback(
+  state: InteractiveModel,
+  status: "approved" | "rejected"
+): InteractiveModel {
+  return appendSystemLine(
+    {
+      ...state,
+      liveStatusLabel: status === "approved" ? "Approval granted" : "Approval rejected",
+      pendingApproval: null
+    },
+    `Approval ${status}.`,
+    status === "approved" ? "success" : "warning"
+  );
 }
 
 function appendActivity(

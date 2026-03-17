@@ -19,7 +19,11 @@ import {
   trimInteractiveInput,
   type InteractiveModel
 } from "./state.js";
-import { applyCommandResultToModel, applyRuntimeEventToModel } from "./reducer.js";
+import {
+  appendApprovalResolutionFeedback,
+  applyCommandResultToModel,
+  applyRuntimeEventToModel
+} from "./reducer.js";
 import { buildViewportLines, reconcileViewportScroll } from "./render.js";
 
 interface InteractiveExit {
@@ -189,7 +193,7 @@ export function InteractiveApp(props: {
     runActiveRef.current = true;
     const decision = modelRef.current.approvalChoiceIndex === 0 ? "approve" : "reject";
     updateModel((current) => ({
-      ...current,
+      ...appendApprovalResolutionFeedback(current, decision === "approve" ? "approved" : "rejected"),
       runtimeStatus: "resuming",
       scrollOffset: 0
     }));

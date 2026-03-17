@@ -314,7 +314,8 @@ function activityTitle(block: TranscriptBlock): string {
     return "Plan update";
   }
   if (block.bucket === "command") {
-    return block.lines.length > 1 ? `Ran ${block.lines.length} commands` : "Ran command";
+    const commandCount = block.lines.filter((line) => line.startsWith("$ ")).length;
+    return commandCount > 1 ? `Ran ${commandCount} commands` : "Ran command";
   }
   if (block.bucket === "edit") {
     return block.lines.length > 1 ? `Edited ${block.lines.length - 1} files` : "Edited";
