@@ -2,7 +2,7 @@ import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { continueTask, startTask } from "../../src/runtime/api.js";
+import { continueTask, resumeTask, startTask } from "../../src/runtime/api.js";
 
 const tempDirs: string[] = [];
 
@@ -79,6 +79,103 @@ describe("runtime context continuation", () => {
     expect(secondRequest.messages[1]?.content).toBe("Inspect package.json");
     expect(secondRequest.messages[2]?.content).toBe("First answer.");
     expect(secondRequest.messages[3]?.content).toBe("Now explain the scripts");
+  });
+
+  it("emits lifecycle events when resuming an approved shell command", async () => {
+    const cwd = await makeWorkspace();
+    const homeDir = await makeHomeDir();
+    await writeHomeConfig(homeDir);
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(
+        jsonResponse({
+          choices: [
+            {
+              message: {
+                content: null,
+                tool_calls: [
+                  {
+                    id: "call-1",
+                    type: "function",
+                    function: {
+                      name: "run_shell",
+                      arguments: JSON.stringify({
+                        command: "printf 'hello' > created.txt"
+                      })
+                    }
+                  }
+                ]
+              }
+            }
+          ]
+        })
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          choices: [
+            {
+              message: {
+                content: "Created the requested file."
+              }
+            }
+          ]
+        })
+      );
+
+    const initial = await startTask({
+      environment: {
+        fetchImpl,
+        processCwd: cwd,
+        sessionHomeDir: homeDir
+      },
+      observer: undefined,
+      options: {},
+      prompt: "Create a file using the shell"
+    });
+
+    const events: Array<{ type: string; tool?: string; status?: string }> = [];
+    const resumed = await resumeTask({
+      environment: {
+        fetchImpl,
+        processCwd: cwd,
+        sessionHomeDir: homeDir
+      },
+      observer: {
+        onEvent(event) {
+          events.push({
+            status: "status" in event ? event.status : undefined,
+            tool: "tool" in event ? event.tool : undefined,
+            type: event.type
+          });
+        }
+      },
+      options: {
+        approvalPolicy: "auto"
+      },
+      sessionId: initial.sessionId
+    });
+
+    expect(resumed?.status).toBe("completed");
+    expect(resumed?.changedFiles).toContain("created.txt");
+    expect(events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          status: "resuming",
+          type: "status"
+        }),
+        expect.objectContaining({
+          type: "approval_resolved"
+        }),
+        expect.objectContaining({
+          tool: "run_shell",
+          type: "tool_called"
+        }),
+        expect.objectContaining({
+          tool: "run_shell",
+          type: "tool_result"
+        })
+      ])
+    );
   });
 });
 

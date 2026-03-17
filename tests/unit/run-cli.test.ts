@@ -411,6 +411,63 @@ describe("runCli", () => {
     );
   });
 
+  it("pauses on run_shell under prompt policy and resumes by executing the approved command", async () => {
+    const cwd = await makeWorkspace();
+    const homeDir = await makeHomeDir();
+    await writeHomeConfig(homeDir, { approvalPolicy: "prompt" });
+    const pauseIo = createMemoryIo();
+    const fetchImpl = createSequenceFetch([
+      toolResponse([
+        {
+          id: "call-1",
+          name: "run_shell",
+          arguments: {
+            command: "printf 'created' > created.txt"
+          }
+        }
+      ]),
+      finalResponse("Shell command completed.")
+    ]);
+
+    const pauseExitCode = await runCli(
+      ["exec", "create a file", "--json", "--cwd", cwd],
+      pauseIo.streams,
+      {
+        fetchImpl,
+        sessionHomeDir: homeDir
+      }
+    );
+
+    expect(pauseExitCode).toBe(2);
+    const pausedPayload = JSON.parse(pauseIo.stdout);
+    expect(pausedPayload.status).toBe("paused");
+    expect(pausedPayload.pendingApproval).toEqual({
+      actionClass: "shell_side_effect",
+      command: "printf 'created' > created.txt",
+      reason: "shell_side_effect",
+      summary: "Approval required to run shell command: printf 'created' > created.txt",
+      tool: "run_shell"
+    });
+
+    const resumeIo = createMemoryIo();
+    const resumeExitCode = await runCli(
+      ["resume", pausedPayload.sessionId, "--json", "--approval-policy", "auto"],
+      resumeIo.streams,
+      {
+        fetchImpl,
+        sessionHomeDir: homeDir
+      }
+    );
+
+    expect(resumeExitCode).toBe(0);
+    const resumedPayload = JSON.parse(resumeIo.stdout);
+    expect(resumedPayload.status).toBe("completed");
+    expect(resumedPayload.approvals[0].status).toBe("approved");
+    expect(resumedPayload.changedFiles).toContain("created.txt");
+    expect(resumedPayload.artifacts[0].path).toBe("created.txt");
+    await expect(readFile(join(cwd, "created.txt"), "utf8")).resolves.toBe("created");
+  });
+
   it("renders doctor output in json mode", async () => {
     const homeDir = await makeHomeDir();
     await writeHomeConfig(homeDir);
