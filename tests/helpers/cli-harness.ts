@@ -1,16 +1,32 @@
 import { once } from "node:events";
 import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { spawn, type ChildProcess } from "node:child_process";
+import { execFile } from "node:child_process";
 import os from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { promisify } from "node:util";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const repoRoot = resolve(__dirname, "../..");
-const distCli = join(repoRoot, "dist", "cli", "main.js");
+export const repoRoot = resolve(__dirname, "../..");
+export const distCli = join(repoRoot, "dist", "cli", "main.js");
 
 const tempDirs: string[] = [];
 const children = new Set<ChildProcess>();
+const execFileAsync = promisify(execFile);
+let built = false;
+
+export async function ensureBuiltCli(): Promise<void> {
+  if (built) {
+    return;
+  }
+
+  await execFileAsync("npm", ["run", "build"], {
+    cwd: repoRoot,
+    env: process.env
+  });
+  built = true;
+}
 
 export function trackHarnessChild(child: ChildProcess): void {
   children.add(child);
@@ -81,6 +97,8 @@ export async function runBuiltCli(args: string[], homeDir: string): Promise<{
   stderr: string;
   stdout: string;
 }> {
+  await ensureBuiltCli();
+
   const child = spawn(process.execPath, [distCli, ...args], {
     cwd: repoRoot,
     env: {

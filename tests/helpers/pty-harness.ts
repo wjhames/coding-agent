@@ -109,6 +109,28 @@ export async function outputAppearsWithin(
   return false;
 }
 
+export async function waitForOutputOrder(
+  session: { getOutput: () => string },
+  input: {
+    first: string;
+    second: string;
+    timeoutMs: number;
+  }
+): Promise<"first" | "second" | "timeout"> {
+  const deadline = Date.now() + input.timeoutMs;
+  while (Date.now() < deadline) {
+    const output = session.getOutput();
+    if (output.includes(input.first)) {
+      return "first";
+    }
+    if (output.includes(input.second)) {
+      return "second";
+    }
+    await sleep(50);
+  }
+  return "timeout";
+}
+
 export async function waitForExit(child: ChildProcess, timeoutMs: number): Promise<void> {
   const close = once(child, "close").then(() => undefined);
   const timeout = sleep(timeoutMs).then(() => {
