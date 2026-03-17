@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { ApprovalRequiredError } from "../app/approval.js";
-import { LlmError, toolCallSchema } from "./openai-transport.js";
+import { LlmError, toolCallSchema, type OpenAICompatibleMessage } from "./openai-transport.js";
 import { normalizeMessageContent } from "./openai-stream.js";
 
 export interface LlmTool {
@@ -13,10 +13,9 @@ export interface LlmTool {
 
 export interface ToolLoopRequest {
   maxRounds?: number;
+  messages: OpenAICompatibleMessage[];
   onTextDelta?: ((delta: string) => void) | undefined;
-  systemPrompt: string;
   tools: LlmTool[];
-  userPrompt: string;
 }
 
 export interface ToolLoopResult {
@@ -71,7 +70,7 @@ export async function executeToolCall(args: {
 export function assistantMessageFromToolLoop(args: {
   content: unknown;
   toolCalls?: z.infer<typeof toolCallSchema>[];
-}): Array<Record<string, unknown>> {
+}): OpenAICompatibleMessage[] {
   return [
     {
       role: "assistant",

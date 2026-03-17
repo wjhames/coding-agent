@@ -2,6 +2,7 @@ import { z } from "zod";
 import {
   chatCompletionResponseSchema,
   LlmError,
+  type OpenAICompatibleMessage,
   sendRequest,
   sendStreamingRequest,
   type OpenAICompatibleClientConfig
@@ -55,16 +56,7 @@ export function createOpenAICompatibleClient(
     },
 
     async runTools(request: ToolLoopRequest): Promise<ToolLoopResult> {
-      const messages: Array<Record<string, unknown>> = [
-        {
-          role: "system",
-          content: request.systemPrompt
-        },
-        {
-          role: "user",
-          content: request.userPrompt
-        }
-      ];
+      const messages: OpenAICompatibleMessage[] = [...request.messages];
       const maxRounds = request.maxRounds ?? DEFAULT_MAX_TOOL_ROUNDS;
 
       for (let round = 0; round < maxRounds; round += 1) {

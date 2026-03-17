@@ -109,21 +109,15 @@ describe("runCli", () => {
       ]
     });
     expect(payload.turnCount).toBeGreaterThanOrEqual(5);
-    expect(payload.context).toEqual({
-      budget: {
-        contextWindowTokens: null,
-        droppedSections: [],
-        inputTokens: 0,
-        outputReserveTokens: 0,
-        remainingTokens: null,
-        sections: [],
-        usedPercent: null
-      },
-      historySummary: null,
-      recentTurnCount: 0,
-      snippets: [],
-      workingSet: []
-    });
+    expect(payload.context.budget.contextWindowTokens).toBeNull();
+    expect(payload.context.budget.inputTokens).toBeGreaterThan(0);
+    expect(payload.context.recentTurnCount).toBeGreaterThan(0);
+    expect(payload.context.snippets.some((snippet: { path: string }) => snippet.path === "package.json")).toBe(
+      true
+    );
+    expect(
+      payload.context.workingSet.some((entry: { path: string }) => entry.path === "AGENTS.md")
+    ).toBe(true);
     expect(payload.verification).toEqual({
       commands: ["npm run lint", "npm run typecheck", "npm test"],
       inferred: true,

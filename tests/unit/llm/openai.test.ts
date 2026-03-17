@@ -41,12 +41,20 @@ describe("createOpenAICompatibleClient", () => {
 
     await expect(
       client.runTools({
+        messages: [
+          {
+            content: "system",
+            role: "system"
+          },
+          {
+            content: "user",
+            role: "user"
+          }
+        ],
         onTextDelta(delta) {
           deltas.push(delta);
         },
-        systemPrompt: "system",
-        tools: [],
-        userPrompt: "user"
+        tools: []
       })
     ).resolves.toEqual({
       text: "Hello world"
@@ -231,7 +239,16 @@ describe("createOpenAICompatibleClient", () => {
 
     await expect(
       client.runTools({
-        systemPrompt: "system",
+        messages: [
+          {
+            content: "system",
+            role: "system"
+          },
+          {
+            content: "user",
+            role: "user"
+          }
+        ],
         tools: [
           {
             description: "Write the plan.",
@@ -250,8 +267,7 @@ describe("createOpenAICompatibleClient", () => {
             name: "write_plan",
             run
           }
-        ],
-        userPrompt: "user"
+        ]
       })
     ).resolves.toEqual({
       text: "Plan is ready."
@@ -338,7 +354,16 @@ describe("createOpenAICompatibleClient", () => {
     await expect(
       client.runTools({
         maxRounds: 1,
-        systemPrompt: "system",
+        messages: [
+          {
+            content: "system",
+            role: "system"
+          },
+          {
+            content: "user",
+            role: "user"
+          }
+        ],
         tools: [
           {
             description: "Write the plan.",
@@ -357,8 +382,7 @@ describe("createOpenAICompatibleClient", () => {
             name: "write_plan",
             run: vi.fn().mockResolvedValue("{\"ok\":true}")
           }
-        ],
-        userPrompt: "user"
+        ]
       })
     ).resolves.toEqual({
       text: "Final answer after forced stop."
@@ -436,7 +460,16 @@ describe("createOpenAICompatibleClient", () => {
 
     await expect(
       client.runTools({
-        systemPrompt: "system",
+        messages: [
+          {
+            content: "system",
+            role: "system"
+          },
+          {
+            content: "user",
+            role: "user"
+          }
+        ],
         tools: [
           {
             description: "Read a file.",
@@ -447,8 +480,7 @@ describe("createOpenAICompatibleClient", () => {
             name: "read_file",
             run: vi.fn().mockRejectedValue(new Error("Requested path is not a file."))
           }
-        ],
-        userPrompt: "user"
+        ]
       })
     ).resolves.toEqual({
       text: "Recovered after tool error."
@@ -523,7 +555,16 @@ describe("createOpenAICompatibleClient", () => {
 
     await expect(
       client.runTools({
-        systemPrompt: "system",
+        messages: [
+          {
+            content: "system",
+            role: "system"
+          },
+          {
+            content: "user",
+            role: "user"
+          }
+        ],
         tools: [
           {
             description: "Read a file.",
@@ -532,8 +573,7 @@ describe("createOpenAICompatibleClient", () => {
             name: "read_file",
             run
           }
-        ],
-        userPrompt: "user"
+        ]
       })
     ).resolves.toEqual({ text: "Done." });
 

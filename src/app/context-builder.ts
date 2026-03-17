@@ -1,148 +1,298 @@
-import type { LoadedGuidance } from "./guidance.js";
+import type { ResolvedExecutionConfig } from "../config/load.js";
+import type {
+  ContextSectionUsage,
+  ContextSnapshot,
+  GuidanceSummary,
+  Observation,
+  PlanState,
+  TurnRecord,
+  VerificationSummary
+} from "../runtime/contracts.js";
 import type { RepoContext } from "./context.js";
-import type { PlanState, TurnRecord } from "../runtime/contracts.js";
+import { collectContextSnippets, deriveWorkingSet } from "./context.js";
 
-const MAX_CONTEXT_CHARS = 16_000;
-const SECTION_BUDGET = {
-  observations: 2_000,
-  snippets: 5_000,
-  turns: 3_000
-} as const;
+export interface ModelMessage {
+  content: string;
+  role: "assistant" | "system" | "user";
+}
 
-export function buildExecutionContext(args: {
+export async function buildRequestContext(args: {
   changedFiles: string[];
+  config: ResolvedExecutionConfig;
   cwd: string;
-  guidance: LoadedGuidance;
-  observations: Array<{ summary: string }>;
+  guidance: GuidanceSummary;
+  observations: Observation[];
+  pendingApprovalSummary: string | null;
   plan: PlanState | null;
   prompt: string;
-  readOnlyTask: boolean;
   repoContext: RepoContext;
+  systemPrompt: string;
   turns: TurnRecord[];
+  verification: VerificationSummary;
   verificationCommands: string[];
-}): string {
-  const sections: string[] = [];
+}): Promise<{
+  context: ContextSnapshot;
+  messages: ModelMessage[];
+}> {
+  const workingSet = deriveWorkingSet({
+    changedFiles: args.changedFiles,
+    observations: args.observations,
+    prompt: args.prompt,
+    repoContext: args.repoContext,
+    turns: args.turns,
+    verification: args.verification
+  });
+  const snippets = await collectContextSnippets({
+    cwd: args.cwd,
+    prompt: args.prompt,
+    turns: args.turns,
+    workingSet
+  });
+  const recentTurns = collectRecentConversationTurns(args.turns);
+  const historySummary = summarizeOlderTurns(args.turns, recentTurns.rawCount);
+  const sections = buildContextSections({
+    changedFiles: args.changedFiles,
+    guidance: args.guidance,
+    historySummary,
+    pendingApprovalSummary: args.pendingApprovalSummary,
+    plan: args.plan,
+    repoContext: args.repoContext,
+    snippets,
+    verification: args.verification,
+    verificationCommands: args.verificationCommands,
+    workingSet
+  });
+  const systemPromptTokens = estimateTokens(args.systemPrompt);
+  const recentTurnSections = recentTurns.messages.map((message, index) => ({
+    name: `recent-turn:${index + 1}`,
+    tokens: estimateTokens(message.content)
+  }));
+  const outputReserveTokens = resolveOutputReserve(args.config.contextWindowTokens);
+  const maxInputTokens =
+    args.config.contextWindowTokens === undefined
+      ? Number.POSITIVE_INFINITY
+      : Math.max(0, args.config.contextWindowTokens - outputReserveTokens);
+  const includedSections: Array<{ content: string; name: string; tokens: number }> = [];
+  const droppedSections: string[] = [];
+  let usedTokens = systemPromptTokens + recentTurnSections.reduce((sum, section) => sum + section.tokens, 0);
 
-  pushSection(sections, ["Current user request:", args.prompt]);
-  pushSection(sections, [
-    "Workspace summary:",
-    `Working directory: ${args.cwd}`,
-    args.readOnlyTask ? "Task mode: read-only inspection." : "Task mode: normal editing workflow.",
-    args.repoContext.isGitRepo ? "Git repository detected." : "No git repository detected.",
-    args.repoContext.guidanceFiles.length > 0
-      ? `Guidance files: ${args.repoContext.guidanceFiles.join(", ")}.`
-      : "No guidance files detected.",
-    args.repoContext.topLevelEntries.length > 0
-      ? `Workspace entries: ${args.repoContext.topLevelEntries.join(", ")}.`
-      : "Workspace is empty.",
-    Object.keys(args.repoContext.packageScripts).length > 0
-      ? `Package scripts: ${Object.keys(args.repoContext.packageScripts).join(", ")}.`
-      : "No package scripts detected.",
-    !args.readOnlyTask && args.verificationCommands.length > 0
-      ? `Likely verification commands: ${args.verificationCommands.join(", ")}.`
-      : args.readOnlyTask
-        ? "Verification is not required unless the user explicitly asks for it."
-        : "No verification commands inferred yet."
-  ]);
+  for (const section of sections) {
+    const tokens = estimateTokens(section.content);
 
-  if (args.guidance.summary.activeRules.length > 0) {
-    pushSection(sections, [
-      "Active guidance:",
-      ...args.guidance.summary.activeRules.map((rule) => `- ${rule}`)
-    ]);
-  }
-
-  if (args.plan) {
-    pushSection(sections, [
-      "Current plan:",
-      `${args.plan.summary} | ${args.plan.items
-        .map((item) => `[${item.status}] ${item.content}`)
-        .join(" ; ")}`
-    ]);
-  }
-
-  if (args.changedFiles.length > 0) {
-    pushSection(sections, [`Changed files so far: ${args.changedFiles.join(", ")}`]);
-  }
-
-  const turnLines = summarizeTurns(args.turns);
-  if (turnLines.length > 0) {
-    pushSection(sections, ["Conversation so far:", ...truncateLines(turnLines, SECTION_BUDGET.turns)]);
-  }
-
-  if (args.observations.length > 0) {
-    pushSection(sections, [
-      "Recent observations:",
-      ...truncateLines(
-        dedupeLines(args.observations.slice(-6).map((observation) => `- ${observation.summary}`)),
-        SECTION_BUDGET.observations
-      )
-    ]);
-  }
-
-  const snippetSections = args.repoContext.snippets.flatMap((snippet) => [
-    `Snippet from ${snippet.path}:`,
-    snippet.content
-  ]);
-  if (snippetSections.length > 0) {
-    pushSection(sections, truncateLines(snippetSections, SECTION_BUDGET.snippets));
-  }
-
-  for (const layer of args.guidance.layers) {
-    if (layer.source === "task") {
+    if (usedTokens + tokens > maxInputTokens) {
+      droppedSections.push(section.name);
       continue;
     }
 
-    pushSection(sections, truncateLines([`Guidance from ${layer.path}:`, layer.content], 1_500));
+    usedTokens += tokens;
+    includedSections.push({
+      content: section.content,
+      name: section.name,
+      tokens
+    });
   }
 
-  return sections.join("\n\n").slice(0, MAX_CONTEXT_CHARS);
+  const context: ContextSnapshot = {
+    budget: {
+      contextWindowTokens: args.config.contextWindowTokens ?? null,
+      droppedSections,
+      inputTokens: usedTokens,
+      outputReserveTokens,
+      remainingTokens:
+        args.config.contextWindowTokens === undefined
+          ? null
+          : Math.max(0, args.config.contextWindowTokens - outputReserveTokens - usedTokens),
+      sections: [
+        {
+          name: "system-prompt",
+          tokens: systemPromptTokens
+        },
+        ...includedSections.map<ContextSectionUsage>((section) => ({
+          name: section.name,
+          tokens: section.tokens
+        })),
+        ...recentTurnSections
+      ],
+      usedPercent:
+        args.config.contextWindowTokens === undefined
+          ? null
+          : Math.min(
+              100,
+              Math.round(
+                (usedTokens / Math.max(1, args.config.contextWindowTokens - outputReserveTokens)) *
+                  100
+              )
+            )
+    },
+    historySummary,
+    recentTurnCount: recentTurns.rawCount,
+    snippets,
+    workingSet
+  };
+
+  return {
+    context,
+    messages: [
+      {
+        content: [args.systemPrompt, ...includedSections.map((section) => section.content)].join("\n\n"),
+        role: "system"
+      },
+      ...recentTurns.messages
+    ]
+  };
 }
 
-function summarizeTurns(turns: TurnRecord[]): string[] {
-  return (turns ?? []).slice(-10).map((turn) => {
+function buildContextSections(args: {
+  changedFiles: string[];
+  guidance: GuidanceSummary;
+  historySummary: string | null;
+  pendingApprovalSummary: string | null;
+  plan: PlanState | null;
+  repoContext: RepoContext;
+  snippets: ContextSnapshot["snippets"];
+  verification: VerificationSummary;
+  verificationCommands: string[];
+  workingSet: ContextSnapshot["workingSet"];
+}): Array<{ content: string; name: string }> {
+  const sections: Array<{ content: string; name: string; priority: number }> = [];
+
+  if (args.guidance.activeRules.length > 0) {
+    sections.push({
+      content: ["Active guidance:", ...args.guidance.activeRules.map((rule) => `- ${rule}`)].join("\n"),
+      name: "guidance",
+      priority: 100
+    });
+  }
+
+  const pinnedStateLines = [
+    args.plan
+      ? `Plan: ${args.plan.summary} | ${args.plan.items.map((item) => `[${item.status}] ${item.content}`).join(" ; ")}`
+      : null,
+    args.pendingApprovalSummary ? `Pending approval: ${args.pendingApprovalSummary}` : null,
+    args.changedFiles.length > 0 ? `Changed files: ${args.changedFiles.join(", ")}` : null,
+    args.verification.status === "failed"
+      ? `Verification failures: ${args.verification.runs
+          .filter((run) => !run.passed)
+          .map((run) => run.command)
+          .join(", ")}`
+      : null,
+    args.verification.status === "not_run" && args.verification.notRunReason
+      ? `Verification not run: ${args.verification.notRunReason}`
+      : null
+  ].filter((line): line is string => line !== null);
+  if (pinnedStateLines.length > 0) {
+    sections.push({
+      content: ["Pinned execution state:", ...pinnedStateLines].join("\n"),
+      name: "pinned-state",
+      priority: 96
+    });
+  }
+
+  sections.push({
+    content: [
+      "Workspace summary:",
+      args.repoContext.isGitRepo ? "Git repository detected." : "No git repository detected.",
+      args.repoContext.guidanceFiles.length > 0
+        ? `Guidance files: ${args.repoContext.guidanceFiles.join(", ")}.`
+        : "No guidance files detected.",
+      args.repoContext.topLevelEntries.length > 0
+        ? `Top-level entries: ${args.repoContext.topLevelEntries.join(", ")}.`
+        : "Workspace is empty.",
+      Object.keys(args.repoContext.packageScripts).length > 0
+        ? `Package scripts: ${Object.keys(args.repoContext.packageScripts).join(", ")}.`
+        : "No package scripts detected.",
+      args.verificationCommands.length > 0
+        ? `Likely verification commands: ${args.verificationCommands.join(", ")}.`
+        : "No verification commands inferred."
+    ].join("\n"),
+    name: "workspace-summary",
+    priority: 88
+  });
+
+  if (args.workingSet.length > 0) {
+    sections.push({
+      content: [
+        "Active working set:",
+        ...args.workingSet.map((entry) => `- ${entry.path}: ${entry.reason}`)
+      ].join("\n"),
+      name: "working-set",
+      priority: 92
+    });
+  }
+
+  if (args.historySummary) {
+    sections.push({
+      content: `Earlier conversation summary:\n${args.historySummary}`,
+      name: "history-summary",
+      priority: 84
+    });
+  }
+
+  for (const snippet of args.snippets) {
+    sections.push({
+      content: `Relevant code from ${snippet.path} (${snippet.reason}):\n${snippet.excerpt}`,
+      name: `snippet:${snippet.path}`,
+      priority: 90
+    });
+  }
+
+  return sections
+    .sort((left, right) => right.priority - left.priority)
+    .map(({ content, name }) => ({ content, name }));
+}
+
+function collectRecentConversationTurns(turns: TurnRecord[]): {
+  messages: ModelMessage[];
+  rawCount: number;
+} {
+  const rawTurns = turns.filter((turn) => turn.kind === "assistant" || turn.kind === "user");
+  const recent = rawTurns.slice(-6);
+
+  return {
+    messages: recent.map((turn) => ({
+      content: "text" in turn ? turn.text : "",
+      role: turn.kind === "assistant" ? "assistant" : "user"
+    })),
+    rawCount: recent.length
+  };
+}
+
+function summarizeOlderTurns(turns: TurnRecord[], recentRawCount: number): string | null {
+  const cutoff = Math.max(0, turns.length - recentRawCount);
+  const older = turns.slice(0, cutoff);
+
+  if (older.length === 0) {
+    return null;
+  }
+
+  const lines = older.slice(-12).map((turn) => {
     if (turn.kind === "tool_call") {
-      return `- Tool call ${turn.tool}: ${turn.inputSummary}`;
+      return `- Tool call ${turn.tool}: ${truncate(turn.inputSummary, 120)}`;
     }
 
     if (turn.kind === "tool_result") {
-      return `- Tool result ${turn.tool}: ${turn.summary}`;
+      const prefix = turn.error ? "failed" : "completed";
+      return `- Tool ${prefix} ${turn.tool}: ${truncate(turn.summary, 120)}`;
     }
 
-    return `- ${turn.kind}: ${turn.text}`;
+    return `- ${turn.kind}: ${truncate(turn.text, 120)}`;
   });
+
+  return lines.join("\n");
 }
 
-function pushSection(target: string[], lines: string[]): void {
-  const content = lines.filter(Boolean).join("\n");
-
-  if (content.length > 0) {
-    target.push(content);
-  }
-}
-
-function truncateLines(lines: string[], budget: number): string[] {
-  const output: string[] = [];
-  let remaining = budget;
-
-  for (const line of lines) {
-    if (remaining <= 0) {
-      break;
-    }
-
-    if (line.length <= remaining) {
-      output.push(line);
-      remaining -= line.length + 1;
-      continue;
-    }
-
-    output.push(`${line.slice(0, Math.max(0, remaining - 3))}...`);
-    break;
+function resolveOutputReserve(contextWindowTokens: number | undefined): number {
+  if (contextWindowTokens === undefined) {
+    return 1024;
   }
 
-  return output;
+  return Math.min(4096, Math.max(1024, Math.floor(contextWindowTokens * 0.2)));
 }
 
-function dedupeLines(lines: string[]): string[] {
-  return [...new Set(lines)];
+function estimateTokens(text: string): number {
+  return Math.max(1, Math.ceil(text.length / 4));
+}
+
+function truncate(text: string, maxLength: number): string {
+  return text.length <= maxLength ? text : `${text.slice(0, maxLength - 3)}...`;
 }

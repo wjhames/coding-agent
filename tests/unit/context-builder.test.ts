@@ -1,49 +1,61 @@
-import { describe, expect, it } from "vitest";
-import { buildExecutionContext } from "../../src/app/context-builder.js";
+import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import os from "node:os";
+import { join } from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
+import { buildRequestContext } from "../../src/app/context-builder.js";
 
-describe("buildExecutionContext", () => {
-  it("uses conversation summaries and bounded sections in the prompt", () => {
-    const context = buildExecutionContext({
+const tempDirs: string[] = [];
+
+describe("buildRequestContext", () => {
+  afterEach(async () => {
+    await Promise.all(tempDirs.map((dir) => rm(dir, { force: true, recursive: true })));
+    tempDirs.length = 0;
+  });
+
+  it("builds provider messages, snippets, and budgeted context", async () => {
+    const cwd = await mkdtemp(join(os.tmpdir(), "coding-agent-context-builder-"));
+    tempDirs.push(cwd);
+    await mkdir(join(cwd, "src"), { recursive: true });
+    await writeFile(join(cwd, "AGENTS.md"), "repo guidance\n", "utf8");
+    await writeFile(join(cwd, "src", "config.ts"), "export const value = 1;\n", "utf8");
+
+    const request = await buildRequestContext({
       changedFiles: ["src/config.ts"],
-      cwd: "/workspace/project",
+      config: {
+        approvalPolicy: "prompt",
+        baseUrl: "http://localhost:1234/v1",
+        contextWindowTokens: 8_000,
+        maxSteps: 8,
+        model: "gpt-4.1-mini",
+        networkEgress: false,
+        profileName: "test",
+        timeout: "60s"
+      },
+      cwd,
       guidance: {
-        layers: [
+        activeRules: ["fix the config", "repo guidance"],
+        sources: [
           {
-            content: "repo guidance",
-            path: "AGENTS.md",
-            priority: 240,
-            rules: ["repo guidance"],
-            source: "repo"
-          },
-          {
-            content: "fix the config",
             path: "task",
             priority: 300,
-            rules: ["fix the config"],
             source: "task"
+          },
+          {
+            path: "AGENTS.md",
+            priority: 240,
+            source: "repo"
           }
-        ],
-        summary: {
-          activeRules: ["fix the config", "repo guidance"],
-          sources: [
-            {
-              path: "task",
-              priority: 300,
-              source: "task"
-            },
-            {
-              path: "AGENTS.md",
-              priority: 240,
-              source: "repo"
-            }
-          ]
-        }
+        ]
       },
       observations: [
         {
-          summary: "Read src/config.ts lines 1-20."
+          excerpt: "1: export const value = 1;",
+          path: "src/config.ts",
+          summary: "Read src/config.ts lines 1-20.",
+          tool: "read_file"
         }
       ],
+      pendingApprovalSummary: null,
       plan: {
         summary: "Fix the config",
         items: [
@@ -55,7 +67,6 @@ describe("buildExecutionContext", () => {
         ]
       },
       prompt: "fix the config",
-      readOnlyTask: false,
       repoContext: {
         guidanceFiles: ["AGENTS.md"],
         isGitRepo: true,
@@ -70,6 +81,7 @@ describe("buildExecutionContext", () => {
         ],
         topLevelEntries: [".git", "AGENTS.md", "src"]
       },
+      systemPrompt: "You are a CLI coding agent.",
       turns: [
         {
           at: "2026-03-16T12:00:00.000Z",
@@ -95,13 +107,26 @@ describe("buildExecutionContext", () => {
           tool: "read_file"
         }
       ],
+      verification: {
+        commands: ["npm test"],
+        inferred: true,
+        notRunReason: "No file changes were made.",
+        passed: false,
+        ran: false,
+        runs: [],
+        selectedCommands: ["npm test"],
+        skippedCommands: [],
+        status: "not_run"
+      },
       verificationCommands: ["npm test"]
     });
 
-    expect(context).toContain("Conversation so far:");
-    expect(context).toContain("Tool call read_file");
-    expect(context).toContain("Tool result read_file");
-    expect(context).toContain("Snippet from src/config.ts:");
-    expect(context.length).toBeLessThanOrEqual(16_000);
+    expect(request.messages[0]?.role).toBe("system");
+    expect(request.messages[0]?.content).toContain("Active guidance:");
+    expect(request.messages[0]?.content).toContain("Relevant code from");
+    expect(request.messages.some((message) => message.role === "user")).toBe(true);
+    expect(request.context.workingSet.some((entry) => entry.path === "src/config.ts")).toBe(true);
+    expect(request.context.budget.inputTokens).toBeGreaterThan(0);
+    expect(request.context.budget.contextWindowTokens).toBe(8_000);
   });
 });

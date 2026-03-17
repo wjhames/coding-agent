@@ -40,12 +40,19 @@ export interface OpenAICompatibleClientConfig {
   model: string;
 }
 
+export interface OpenAICompatibleMessage {
+  content?: string | null;
+  role: "assistant" | "system" | "tool" | "user";
+  tool_call_id?: string | undefined;
+  tool_calls?: unknown;
+}
+
 export class LlmError extends Error {}
 
 export async function sendRequest(args: {
   config: OpenAICompatibleClientConfig;
   fetchImpl: typeof fetch;
-  messages: Array<Record<string, unknown>>;
+  messages: OpenAICompatibleMessage[];
   tools?: Array<{
     description: string;
     inputJsonSchema: Record<string, unknown>;
@@ -92,7 +99,7 @@ export async function sendRequest(args: {
 export async function sendStreamingRequest(args: {
   config: OpenAICompatibleClientConfig;
   fetchImpl: typeof fetch;
-  messages: Array<Record<string, unknown>>;
+  messages: OpenAICompatibleMessage[];
   tools?: Array<{
     description: string;
     inputJsonSchema: Record<string, unknown>;
