@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
-import { pathToFileURL } from "node:url";
+import { realpathSync } from "node:fs";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import process from "node:process";
 import { ApprovalDeniedError } from "../app/approval.js";
 import { ConfigError } from "../config/load.js";
@@ -195,11 +196,17 @@ if (isEntrypoint()) {
 }
 
 function isEntrypoint(): boolean {
-  const entry = process.argv[1];
+  return isEntrypointPath(process.argv[1], import.meta.url);
+}
 
+export function isEntrypointPath(entry: string | undefined, moduleUrl: string): boolean {
   if (!entry) {
     return false;
   }
 
-  return import.meta.url === pathToFileURL(entry).href;
+  try {
+    return realpathSync(entry) === realpathSync(fileURLToPath(moduleUrl));
+  } catch {
+    return moduleUrl === pathToFileURL(entry).href;
+  }
 }
