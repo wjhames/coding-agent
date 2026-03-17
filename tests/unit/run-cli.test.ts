@@ -136,6 +136,28 @@ describe("runCli", () => {
     });
   });
 
+  it("exec writes the settled assistant summary once in plain-text mode", async () => {
+    const cwd = await makeWorkspace();
+    const homeDir = await makeHomeDir();
+    await writeHomeConfig(homeDir);
+    const io = createMemoryIo();
+    const fetchImpl = mockCompletionFetch("Plan ready.");
+
+    const exitCode = await runCli(
+      ["exec", "inspect repo", "--cwd", cwd],
+      io.streams,
+      {
+        fetchImpl,
+        sessionHomeDir: homeDir
+      }
+    );
+
+    expect(exitCode).toBe(0);
+    expect(io.stdout).toContain("Plan ready.");
+    expect(io.stdout.match(/Plan ready\./g)).toHaveLength(1);
+    expect(io.stderr).toBe("");
+  });
+
   it("resume loads the latest session when no id is provided", async () => {
     const cwd = await makeWorkspace();
     const homeDir = await makeHomeDir();
