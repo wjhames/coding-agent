@@ -67,4 +67,42 @@ describe("interactive markdown", () => {
       )
     ).toBe(true);
   });
+
+  it("renders settled tables as aligned rows", () => {
+    const lines = renderFinalMarkdown(
+      "| Name | Value |\n| --- | ---: |\n| alpha | 1 |\n| beta | 22 |",
+      80
+    );
+    const text = lines.map((line) => line.text);
+
+    expect(text).toContain("| Name  | Value |");
+    expect(text).toContain("| alpha |     1 |");
+    expect(text).toContain("| beta  |    22 |");
+    expect(text).toContain("|-------|-------|");
+  });
+
+  it("wraps long table cells onto multiple lines instead of truncating", () => {
+    const lines = renderFinalMarkdown(
+      "| Column | Notes |\n| --- | --- |\n| left | this cell should wrap across multiple visual lines in the table renderer |",
+      42
+    );
+    const text = lines.map((line) => line.text);
+
+    expect(text.some((line) => line.includes("| left"))).toBe(true);
+    expect(text.some((line) => line.includes("this cell"))).toBe(true);
+    expect(text.some((line) => line.includes("multiple"))).toBe(true);
+    expect(text.some((line) => line.includes("renderer"))).toBe(true);
+  });
+
+  it("keeps malformed table candidates as plain paragraph text", () => {
+    const lines = renderFinalMarkdown(
+      "| Name | Value |\n| nope | nope |\n| alpha | 1 |",
+      80
+    );
+    const text = lines.map((line) => line.text);
+
+    expect(text).toContain("| Name | Value |");
+    expect(text).toContain("| nope | nope |");
+    expect(text).not.toContain("|-------|");
+  });
 });
