@@ -328,6 +328,24 @@ function appendSettledAssistantMessage(
   text: string,
   suffix: string
 ): InteractiveModel {
+  const last = state.blocks.at(-1);
+  if (last?.kind === "assistant" && last.streaming) {
+    return {
+      ...state,
+      blocks: [
+        ...state.blocks.slice(0, -1),
+        {
+          id: `assistant:${suffix}`,
+          kind: "assistant",
+          lines: text.split("\n"),
+          streaming: false,
+          tone: "default"
+        }
+      ],
+      scrollOffset: state.scrollOffset
+    };
+  }
+
   const settled = settleAssistantBlocks(state);
   return {
     ...settled,

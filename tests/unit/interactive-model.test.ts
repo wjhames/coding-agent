@@ -558,6 +558,31 @@ describe("interactive model", () => {
     expect(model.blocks.find((block) => block.kind === "assistant")?.streaming).toBe(false);
   });
 
+  it("replaces streamed assistant text with the settled message instead of duplicating it", () => {
+    let model = createInteractiveModel({
+      cwd: "/workspace/project",
+      doctor: null,
+      recentSessions: []
+    });
+
+    model = applyRuntimeEventToModel(model, {
+      at: "2026-03-10T10:00:00.000Z",
+      delta: "Thesis Excerpt\n\nFirst pass",
+      type: "assistant_delta"
+    });
+    model = applyRuntimeEventToModel(model, {
+      at: "2026-03-10T10:00:01.000Z",
+      text: "Thesis Excerpt\n\nFinal pass",
+      type: "assistant_message"
+    });
+
+    const assistantBlocks = model.blocks.filter((block) => block.kind === "assistant");
+
+    expect(assistantBlocks).toHaveLength(1);
+    expect(assistantBlocks[0]?.streaming).toBe(false);
+    expect(assistantBlocks[0]?.lines.join("\n")).toBe("Thesis Excerpt\n\nFinal pass");
+  });
+
   it("inserts separators when tool activity returns to assistant output", () => {
     let model = createInteractiveModel({
       cwd: "/workspace/project",
