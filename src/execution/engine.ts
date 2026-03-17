@@ -12,19 +12,9 @@ import type { ParsedOptions } from "../cli/parse.js";
 import { createOpenAICompatibleClient } from "../llm/openai-client.js";
 import type { CommandResult, RuntimeObserver } from "../runtime/contracts.js";
 import type { SessionRecord } from "../session/aggregate.js";
-import { emptyCompactionSummary, emptyMemorySummary } from "../session/aggregate.js";
+import { emptyContextSnapshot, emptyGuidanceSummary, emptyVerificationSummary } from "../session/aggregate.js";
 import { resultFromSession } from "../session/mappers.js";
-import { createSession, updateSession } from "../session/store.js";
-import {
-  createApprovalRequestedEvent,
-  createApprovalResolvedEvent,
-  createCompactionUpdatedEvent,
-  createMemoryUpdatedEvent,
-  createSessionCompletedEvent,
-  createSessionFailedEvent,
-  createSessionPausedEvent,
-  createSummaryUpdatedEvent
-} from "../session/events.js";
+import { createSession, listRecentSessions, loadSession, updateSession } from "../session/store.js";
 import { applyPatchOperations } from "../tools/apply-patch.js";
 import { runShellAction } from "../tools/run-shell.js";
 import {
@@ -33,15 +23,15 @@ import {
   buildFinalSummary,
   changedFilesList,
   createExecutionState,
-  deriveNextActions,
-  syncDerivedState,
+  recordSystemNote,
+  recordUserTurn,
+  toExecutionSnapshot,
   toRepoContextSummary,
   type ExecutionState
 } from "./state.js";
-import { buildResumePrompt, isLikelyReadOnlyTask } from "./prompts.js";
+import { isLikelyReadOnlyTask } from "./prompts.js";
 import { runModelLoop, emitRuntimeEvent } from "./model-loop.js";
 import { runVerificationCycle } from "./verification-cycle.js";
-import { listRecentSessions, loadSession } from "../session/store.js";
 
 export async function runExec(args: {
   fetchImpl: typeof fetch | undefined;
@@ -59,6 +49,7 @@ export async function runExec(args: {
     observer: args.observer,
     options: args.options,
     prompt: args.prompt,
+    recordPromptTurn: true,
     sessionHomeDir: args.sessionHomeDir
   });
 }
@@ -112,7 +103,7 @@ async function continueExec(args: {
     config
   });
 
-  if (args.session.status !== "paused" || args.session.pendingAction === null) {
+  if (args.session.status !== "paused" || args.session.state.pendingAction === null) {
     return resultFromSession(args.session);
   }
 
@@ -120,73 +111,48 @@ async function continueExec(args: {
     return resultFromSession(args.session);
   }
 
+  const state = createExecutionState({
+    approvals: args.session.state.approvals,
+    artifacts: args.session.state.artifacts,
+    changedFiles: args.session.state.changedFiles,
+    context: args.session.context,
+    guidance: args.session.guidance,
+    observations: args.session.state.observations,
+    pendingAction: args.session.state.pendingAction,
+    plan: args.session.state.plan,
+    turns: args.session.turns,
+    verification: args.session.state.verification
+  });
+
   if (resolvedConfig.approvalPolicy === "never") {
-    const rejectionEvent = createApprovalResolvedEvent({
-      approvalId: args.session.pendingAction.approval.id,
-      status: "rejected"
-    });
-    const rejectedApprovals = args.session.approvals.map((approval) =>
-      approval.id === args.session.pendingAction?.approval.id
-        ? { ...approval, status: "rejected" as const }
-        : approval
+    const approvalId = args.session.state.pendingAction.approval.id;
+    state.approvals = state.approvals.map((approval) =>
+      approval.id === approvalId ? { ...approval, status: "rejected" as const } : approval
     );
-    const rejectedState = createExecutionState({
-      approvals: rejectedApprovals,
-      artifacts: args.session.artifacts,
-      changedFiles: args.session.changedFiles,
-      compaction: args.session.compaction,
-      guidance: args.session.guidance,
-      memory: args.session.memory,
-      observations: args.session.observations,
-      pendingAction: null,
-      plan: args.session.plan,
-      verification: args.session.verification
-    });
-    rejectedState.events.push(rejectionEvent);
-    syncDerivedState(rejectedState);
-    const failedSession = await updateSession(
-      args.session.id,
-      {
-        approvals: rejectedState.approvals,
-        artifacts: rejectedState.artifacts,
-        changedFiles: changedFilesList(rejectedState),
-        compaction: rejectedState.compaction,
+    state.pendingAction = null;
+    recordSystemNote(state, `Approval rejected: ${args.session.state.pendingAction.approval.summary}`);
+
+    const failedSession = await persistSession({
+      existingSession: args.session,
+      input: {
         config: args.session.config,
+        context: state.context,
         cwd: args.session.cwd,
-        eventCount: args.session.eventCount,
-        events: rejectedState.events,
         guidance: args.session.guidance,
-        lastEventAt: rejectionEvent.at,
-        memory: rejectedState.memory,
-        mode: args.session.mode,
-        nextActions: args.session.nextActions,
-        observations: rejectedState.observations,
-        pendingAction: null,
-        plan: args.session.plan,
+        mode: "exec",
         prompt: args.session.prompt,
         repoContext: args.session.repoContext,
+        state: toExecutionSnapshot(state),
         status: "failed",
-        summary: `Approval denied for pending action: ${args.session.pendingAction.approval.summary}`,
-        verification: args.session.verification
+        summary: `Approval denied for pending action: ${args.session.state.pendingAction.approval.summary}`,
+        turns: state.turns
       },
-      args.sessionHomeDir
-    );
+      sessionHomeDir: args.sessionHomeDir
+    });
 
     return resultFromSession(failedSession);
   }
 
-  const state = createExecutionState({
-    approvals: args.session.approvals,
-    artifacts: args.session.artifacts,
-    changedFiles: args.session.changedFiles,
-    compaction: args.session.compaction,
-    guidance: args.session.guidance,
-    memory: args.session.memory,
-    observations: args.session.observations,
-    pendingAction: args.session.pendingAction,
-    plan: args.session.plan,
-    verification: args.session.verification
-  });
   emitRuntimeEvent(args.observer, {
     at: new Date().toISOString(),
     detail: `Resuming session ${args.session.id}`,
@@ -205,7 +171,8 @@ async function continueExec(args: {
     fetchImpl: args.fetchImpl,
     observer: args.observer,
     options: args.options,
-    prompt: buildResumePrompt(args.session),
+    prompt: args.session.prompt,
+    recordPromptTurn: false,
     sessionHomeDir: args.sessionHomeDir,
     state
   });
@@ -218,6 +185,7 @@ async function executeTask(args: {
   observer: RuntimeObserver | undefined;
   options: ParsedOptions;
   prompt: string;
+  recordPromptTurn: boolean;
   sessionHomeDir: string | undefined;
   state?: ExecutionState;
 }): Promise<CommandResult> {
@@ -247,27 +215,32 @@ async function executeTask(args: {
     args.state ??
     createExecutionState({
       changedFiles: [],
-      compaction: emptyCompactionSummary(),
+      context: emptyContextSnapshot(),
       guidance: guidance.summary,
-      memory: emptyMemorySummary(),
       observations: [],
       pendingAction: null,
       plan: null,
+      turns: [],
       verification: {
+        ...emptyVerificationSummary(),
         commands: verificationCommands,
-        inferred: true,
         notRunReason: "Verification has not run yet.",
-        passed: false,
-        ran: false,
-        runs: [],
         selectedCommands: verificationCommands,
-        skippedCommands: verificationPlan.skippedCommands,
-        status: "not_run"
+        skippedCommands: verificationPlan.skippedCommands
       }
     });
-  state.verification.commands = verificationCommands;
-  state.verification.inferred = true;
-  syncDerivedState(state);
+  state.guidance = guidance.summary;
+  state.verification = {
+    ...state.verification,
+    commands: verificationCommands,
+    inferred: true,
+    selectedCommands: verificationCommands,
+    skippedCommands: verificationPlan.skippedCommands
+  };
+
+  if (args.recordPromptTurn) {
+    recordUserTurn(state, args.prompt);
+  }
 
   const client = createOpenAICompatibleClient({
     apiKey: llmConfig.apiKey,
@@ -312,60 +285,25 @@ async function executeTask(args: {
       summary = verificationResult.summary;
     }
 
-    syncDerivedState(state);
-    const nextActions = deriveNextActions(state.plan);
     const status = state.verification.status === "failed" ? "failed" : "completed";
     const finalSummary = buildFinalSummary(summary, {
       changedFiles: changedFilesList(state),
       verification: state.verification
     });
-    state.events.push(
-      createSummaryUpdatedEvent({
-        nextActions,
-        summary: finalSummary
-      })
-    );
-    state.events.push(
-      status === "completed"
-        ? createSessionCompletedEvent({
-            approvals: state.approvals,
-            artifacts: state.artifacts,
-            changedFiles: changedFilesList(state),
-            pendingAction: null,
-            summary: finalSummary,
-            verification: state.verification
-          })
-        : createSessionFailedEvent({
-            approvals: state.approvals,
-            artifacts: state.artifacts,
-            changedFiles: changedFilesList(state),
-            pendingAction: null,
-            summary: finalSummary,
-            verification: state.verification
-          })
-    );
     const persisted = await persistSession({
       existingSession: args.existingSession,
       input: {
-        approvals: state.approvals,
-        artifacts: state.artifacts,
-        changedFiles: changedFilesList(state),
-        compaction: state.compaction,
         config: resolvedConfig,
+        context: state.context,
         cwd: args.cwd,
-        events: state.events,
         guidance: state.guidance,
-        memory: state.memory,
         mode: "exec",
-        nextActions,
-        observations: state.observations,
-        pendingAction: null,
-        plan: state.plan,
         prompt: args.prompt,
         repoContext: repoContextSummary,
+        state: toExecutionSnapshot(state),
         status,
         summary: finalSummary,
-        verification: state.verification
+        turns: state.turns
       },
       sessionHomeDir: args.sessionHomeDir
     });
@@ -385,58 +323,28 @@ async function executeTask(args: {
     if (error instanceof ApprovalRequiredError) {
       state.pendingAction = error.action;
       state.approvals = [...state.approvals.filter((item) => item.id !== error.approval.id), error.approval];
-      state.events.push(
-        createApprovalRequestedEvent({
-          approval: error.approval,
-          pendingAction: error.action
-        })
-      );
+      recordSystemNote(state, `Approval required: ${error.approval.summary}`);
       emitRuntimeEvent(args.observer, {
         approval: error.approval,
         at: new Date().toISOString(),
         pendingAction: error.action,
         type: "approval_requested"
       });
-      syncDerivedState(state);
       const summary = error.approval.summary;
-      state.events.push(
-        createSummaryUpdatedEvent({
-          nextActions: deriveNextActions(state.plan),
-          summary
-        })
-      );
-      state.events.push(
-        createSessionPausedEvent({
-          approvals: state.approvals,
-          artifacts: state.artifacts,
-          changedFiles: changedFilesList(state),
-          pendingAction: state.pendingAction,
-          summary,
-          verification: state.verification
-        })
-      );
       const pausedSession = await persistSession({
         existingSession: args.existingSession,
         input: {
-          approvals: state.approvals,
-          artifacts: state.artifacts,
-          changedFiles: changedFilesList(state),
-          compaction: state.compaction,
           config: resolvedConfig,
+          context: state.context,
           cwd: args.cwd,
-          events: state.events,
           guidance: state.guidance,
-          memory: state.memory,
           mode: "exec",
-          nextActions: deriveNextActions(state.plan),
-          observations: state.observations,
-          pendingAction: state.pendingAction,
-          plan: state.plan,
           prompt: args.prompt,
           repoContext: repoContextSummary,
+          state: toExecutionSnapshot(state),
           status: "paused",
           summary,
-          verification: state.verification
+          turns: state.turns
         },
         sessionHomeDir: args.sessionHomeDir
       });
@@ -460,43 +368,21 @@ async function executeTask(args: {
     }
 
     if (error instanceof Error) {
-      syncDerivedState(state);
+      recordSystemNote(state, error.message);
       const failedSession = await persistSession({
         existingSession: args.existingSession,
         input: {
-          approvals: state.approvals,
-          artifacts: state.artifacts,
-          changedFiles: changedFilesList(state),
-          compaction: state.compaction,
           config: resolvedConfig,
+          context: state.context,
           cwd: args.cwd,
-          events: [
-            ...state.events,
-            createSummaryUpdatedEvent({
-              nextActions: deriveNextActions(state.plan),
-              summary: error.message
-            }),
-            createSessionFailedEvent({
-              approvals: state.approvals,
-              artifacts: state.artifacts,
-              changedFiles: changedFilesList(state),
-              pendingAction: null,
-              summary: error.message,
-              verification: state.verification
-            })
-          ],
           guidance: state.guidance,
-          memory: state.memory,
           mode: "exec",
-          nextActions: deriveNextActions(state.plan),
-          observations: state.observations,
-          pendingAction: null,
-          plan: state.plan,
           prompt: args.prompt,
           repoContext: repoContextSummary,
+          state: toExecutionSnapshot(state),
           status: "failed",
           summary: error.message,
-          verification: state.verification
+          turns: state.turns
         },
         sessionHomeDir: args.sessionHomeDir
       });
@@ -529,12 +415,6 @@ async function executePendingAction(args: {
   }
 
   const approvalId = args.state.pendingAction.approval.id;
-  args.state.events.push(
-    createApprovalResolvedEvent({
-      approvalId,
-      status: "approved"
-    })
-  );
   emitRuntimeEvent(args.observer, {
     approvalId,
     at: new Date().toISOString(),
@@ -544,6 +424,7 @@ async function executePendingAction(args: {
   args.state.approvals = args.state.approvals.map((approval) =>
     approval.id === approvalId ? { ...approval, status: "approved" as const } : approval
   );
+  recordSystemNote(args.state, `Approval approved: ${args.state.pendingAction.approval.summary}`);
 
   if (args.state.pendingAction.tool === "apply_patch") {
     await applyPatchOperations({
@@ -576,31 +457,22 @@ async function executePendingAction(args: {
   }
 
   args.state.pendingAction = null;
-  syncDerivedState(args.state);
 }
 
 async function persistSession(args: {
   existingSession: SessionRecord | null;
   input: {
-    approvals: ExecutionState["approvals"];
-    artifacts: ExecutionState["artifacts"];
-    changedFiles: string[];
-    compaction: ExecutionState["compaction"];
     config: SessionRecord["config"];
+    context: SessionRecord["context"];
     cwd: string;
-    events: SessionRecord["eventCount"] extends number ? import("../session/events.js").SessionEvent[] : never;
-    guidance: ExecutionState["guidance"];
-    memory: ExecutionState["memory"];
+    guidance: SessionRecord["guidance"];
     mode: "exec";
-    nextActions: string[];
-    observations: ExecutionState["observations"];
-    pendingAction: PendingAction | null;
-    plan: ExecutionState["plan"];
     prompt: string;
     repoContext: SessionRecord["repoContext"];
+    state: SessionRecord["state"];
     status: "completed" | "failed" | "paused";
     summary: string;
-    verification: ExecutionState["verification"];
+    turns: SessionRecord["turns"];
   };
   sessionHomeDir: string | undefined;
 }): Promise<SessionRecord> {

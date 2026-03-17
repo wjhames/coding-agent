@@ -39,18 +39,15 @@ export function buildResumePrompt(session: SessionRecord): string {
     session.prompt,
     "",
     "Resuming previous session.",
-    session.plan ? `Plan: ${serializePlan(session.plan)}` : "No stored plan.",
-    session.compaction.observationSummary
-      ? `Compaction: ${session.compaction.observationSummary}`
-      : "No compaction summary yet.",
-    session.memory.working.length > 0
-      ? `Working memory: ${session.memory.working.map((entry) => entry.summary).join(" | ")}`
-      : "No working memory yet.",
-    session.changedFiles.length > 0
-      ? `Changed files so far: ${session.changedFiles.join(", ")}.`
+    session.state.plan ? `Plan: ${serializePlan(session.state.plan)}` : "No stored plan.",
+    session.context.historySummary
+      ? `Earlier history: ${session.context.historySummary}`
+      : "No compacted history yet.",
+    session.state.changedFiles.length > 0
+      ? `Changed files so far: ${session.state.changedFiles.join(", ")}.`
       : "No changed files yet.",
-    session.observations.length > 0
-      ? `Recent observations: ${session.observations
+    session.state.observations.length > 0
+      ? `Recent observations: ${session.state.observations
           .slice(-5)
           .map((observation) => observation.summary)
           .join(" | ")}`

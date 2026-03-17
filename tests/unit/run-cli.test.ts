@@ -71,6 +71,11 @@ describe("runCli", () => {
     expect(payload.repoContext).toEqual({
       guidanceFiles: ["AGENTS.md", "README.md", "package.json"],
       isGitRepo: true,
+      packageScripts: {
+        lint: "node -e \"process.exit(0)\"",
+        test: "node -e \"process.exit(0)\"",
+        typecheck: "node -e \"process.exit(0)\""
+      },
       topLevelEntries: [".git", "AGENTS.md", "README.md", "package.json"]
     });
     expect(payload.guidance).toEqual({
@@ -103,16 +108,21 @@ describe("runCli", () => {
         }
       ]
     });
-    expect(payload.memory.working.map((entry: { summary: string }) => entry.summary)).toEqual([
-      "Plan: Investigate the repository",
-      "Found 1 match(es) for \"scripts\".",
-      expect.stringContaining("Read package.json lines")
-    ]);
-    expect(payload.compaction).toEqual({
-      changedFilesSummary: null,
-      eventSummary: null,
-      observationSummary: null,
-      verificationSummary: null
+    expect(payload.turnCount).toBeGreaterThanOrEqual(5);
+    expect(payload.context).toEqual({
+      budget: {
+        contextWindowTokens: null,
+        droppedSections: [],
+        inputTokens: 0,
+        outputReserveTokens: 0,
+        remainingTokens: null,
+        sections: [],
+        usedPercent: null
+      },
+      historySummary: null,
+      recentTurnCount: 0,
+      snippets: [],
+      workingSet: []
     });
     expect(payload.verification).toEqual({
       commands: ["npm run lint", "npm run typecheck", "npm test"],

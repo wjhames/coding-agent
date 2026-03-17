@@ -16,6 +16,8 @@ export function applyRuntimeEventToModel(
   switch (event.type) {
     case "status":
       return applyStatusEvent(state, event);
+    case "context_updated":
+      return state;
     case "plan_updated":
       return event.plan
         ? appendActivity(

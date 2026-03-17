@@ -1,12 +1,8 @@
 import { runVerificationCommands } from "../app/verification-runner.js";
 import type { RuntimeObserver } from "../runtime/contracts.js";
 import {
-  createVerificationCompletedEvent,
-  createVerificationStartedEvent
-} from "../session/events.js";
-import {
   changedFilesList,
-  syncDerivedState,
+  recordSystemNote,
   type ExecutionState
 } from "./state.js";
 import { buildVerificationFailurePrompt } from "./prompts.js";
@@ -85,7 +81,6 @@ export async function runVerificationCycle(args: {
       skippedCommands: args.skippedCommands,
       status: "not_run"
     };
-    syncDerivedState(args.state);
   }
 
   return { summary };
@@ -115,7 +110,7 @@ async function runVerificationPass(args: {
     status: "verifying",
     type: "status"
   });
-  args.state.events.push(createVerificationStartedEvent(args.commands));
+  recordSystemNote(args.state, `Verification started: ${args.commands.join(", ")}`);
   emitRuntimeEvent(args.observer, {
     at: new Date().toISOString(),
     commands: args.commands,
@@ -126,7 +121,17 @@ async function runVerificationPass(args: {
     cwd: args.cwd,
     skippedCommands: args.skippedCommands
   });
-  args.state.events.push(createVerificationCompletedEvent(verification));
+  recordSystemNote(
+    args.state,
+    verification.status === "passed"
+      ? `Verification passed: ${verification.runs.map((run) => run.command).join(", ")}`
+      : verification.status === "failed"
+        ? `Verification failed: ${verification.runs
+            .filter((run) => !run.passed)
+            .map((run) => run.command)
+            .join(", ")}`
+        : `Verification not run: ${verification.notRunReason ?? "unknown"}`
+  );
   emitRuntimeEvent(args.observer, {
     at: new Date().toISOString(),
     type: "verification_completed",
@@ -134,6 +139,5 @@ async function runVerificationPass(args: {
   });
   args.state.verification = verification;
   appendVerificationObservations(args.state);
-  syncDerivedState(args.state);
   return verification;
 }

@@ -5,11 +5,6 @@ import { ApprovalRequiredError } from "../app/approval.js";
 import type { ResolvedExecutionConfig } from "../config/load.js";
 import { createOpenAICompatibleClient, type LlmTool } from "../llm/openai-client.js";
 import type { Observation, RuntimeObserver } from "../runtime/contracts.js";
-import {
-  createPlanUpdatedEvent,
-  createToolCalledEvent,
-  createToolResultRecordedEvent
-} from "../session/events.js";
 import { createApplyPatchTool } from "../tools/apply-patch.js";
 import { createListFilesTool } from "../tools/list-files.js";
 import { createReadFileTool } from "../tools/read-file.js";
@@ -22,7 +17,9 @@ import {
   addChangedFiles,
   addObservation,
   changedFilesList,
-  syncDerivedState,
+  recordAssistantTurn,
+  recordToolCallTurn,
+  recordToolResultTurn,
   type ExecutionState
 } from "./state.js";
 import { buildSystemPrompt } from "./prompts.js";
@@ -62,17 +59,23 @@ export async function runModelLoop(args: {
     tools,
     userPrompt: buildExecutionContext({
       changedFiles: changedFilesList(args.state),
-      compaction: args.state.compaction,
       cwd: args.cwd,
       guidance: args.guidance,
-      memory: args.state.memory,
       observations: args.state.observations,
       plan: args.state.plan,
       prompt: args.prompt,
       readOnlyTask: args.readOnlyTask,
       repoContext: args.repoContext,
+      turns: args.state.turns,
       verificationCommands: args.verificationCommands
     })
+  });
+
+  recordAssistantTurn(args.state, toolResult.text);
+  emitRuntimeEvent(args.observer, {
+    at: new Date().toISOString(),
+    text: toolResult.text,
+    type: "assistant_message"
   });
 
   return toolResult.text;
@@ -97,13 +100,11 @@ function createRuntimeTools(args: {
       getPlan: () => args.state.plan,
       setPlan: (nextPlan) => {
         args.state.plan = nextPlan;
-        args.state.events.push(createPlanUpdatedEvent(nextPlan));
         emitRuntimeEvent(args.observer, {
           at: new Date().toISOString(),
           plan: nextPlan,
           type: "plan_updated"
         });
-        syncDerivedState(args.state);
       }
     }),
     createListFilesTool({
@@ -176,12 +177,7 @@ function wrapToolWithEvents(args: {
     async run(input) {
       const inputSummary = summarizeToolInput(input);
       const toolName = normalizeToolName(args.tool.name);
-      args.state.events.push(
-        createToolCalledEvent({
-          inputSummary,
-          tool: toolName
-        })
-      );
+      recordToolCallTurn(args.state, inputSummary, toolName);
       emitRuntimeEvent(args.observer, {
         at: new Date().toISOString(),
         inputSummary,
@@ -200,17 +196,17 @@ function wrapToolWithEvents(args: {
         const newChangedFiles = changedFilesList(args.state).filter(
           (path) => !beforeChangedFiles.has(path)
         );
-        args.state.events.push(
-          createToolResultRecordedEvent({
-            ...(args.state.observations.length > beforeObservationCount && latestObservation
-              ? { observation: latestObservation }
-              : {}),
-            ...(newArtifacts.length > 0 ? { artifacts: newArtifacts } : {}),
-            ...(newChangedFiles.length > 0 ? { changedFiles: newChangedFiles } : {}),
-            tool: toolName
-          })
-        );
-        syncDerivedState(args.state);
+        recordToolResultTurn({
+          ...(newChangedFiles.length > 0 ? { changedFiles: newChangedFiles } : {}),
+          ...(latestObservation?.path ? { paths: [latestObservation.path] } : {}),
+          state: args.state,
+          summary:
+            latestObservation?.summary ??
+            (newChangedFiles.length > 0
+              ? `Updated ${newChangedFiles.join(", ")}.`
+              : `${toolName} completed.`),
+          tool: toolName
+        });
         emitRuntimeEvent(args.observer, {
           ...(args.state.observations.length > beforeObservationCount && latestObservation
             ? { observation: latestObservation }
@@ -229,25 +225,25 @@ function wrapToolWithEvents(args: {
 
         const message = error instanceof Error ? error.message : "Unknown tool failure.";
         const observableTool = toObservationToolName(args.tool.name);
-        const observation =
+        const observation: Observation | null =
           observableTool === null
             ? null
-            : ({
+            : {
                 excerpt: message,
                 summary: `Tool error from ${args.tool.name}: ${message}`,
                 tool: observableTool
-              } satisfies Observation);
+              };
 
         if (observation) {
           addObservation(args.state, observation);
         }
-        args.state.events.push(
-          createToolResultRecordedEvent({
-            ...(observation ? { observation } : {}),
-            tool: toolName
-          })
-        );
-        syncDerivedState(args.state);
+        recordToolResultTurn({
+          error: message,
+          ...("path" in (observation ?? {}) && observation?.path ? { paths: [observation.path] } : {}),
+          state: args.state,
+          summary: observation?.summary ?? `Tool error from ${args.tool.name}: ${message}`,
+          tool: toolName
+        });
         emitRuntimeEvent(args.observer, {
           at: new Date().toISOString(),
           error: message,

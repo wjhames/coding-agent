@@ -15,6 +15,7 @@ export const DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1";
 export interface ResolvedExecutionConfig {
   approvalPolicy: CodingAgentProfile["approvalPolicy"];
   baseUrl: string | undefined;
+  contextWindowTokens: number | undefined;
   maxSteps: number | undefined;
   model: string | undefined;
   networkEgress: boolean | undefined;
@@ -60,6 +61,7 @@ export function resolveExecutionConfig(args: {
     approvalPolicy:
       normalizeApprovalPolicy(cliOptions.approvalPolicy) ?? profile?.approvalPolicy ?? "prompt",
     baseUrl: cliOptions.baseUrl ?? profile?.baseUrl ?? DEFAULT_OPENAI_BASE_URL,
+    contextWindowTokens: profile?.contextWindowTokens,
     maxSteps: cliOptions.maxSteps ?? profile?.maxSteps,
     model: cliOptions.model ?? profile?.model,
     networkEgress: profile?.networkEgress,

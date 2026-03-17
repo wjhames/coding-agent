@@ -1,111 +1,115 @@
 import { describe, expect, it } from "vitest";
-import { reduceSessionEvents } from "../../src/session/aggregate.js";
 import {
-  createApprovalRequestedEvent,
-  createSessionCompletedEvent,
-  createSessionStartedEvent,
-  createToolResultRecordedEvent
-} from "../../src/session/events.js";
+  createSessionRecord,
+  dedupeArtifacts,
+  normalizePaths,
+  updateSessionRecord,
+  upsertApproval
+} from "../../src/session/aggregate.js";
 
 describe("session aggregate", () => {
-  it("requires session_started as the first event", () => {
-    expect(() =>
-      reduceSessionEvents([
-        createSessionCompletedEvent({
-          approvals: [],
-          artifacts: [],
-          changedFiles: [],
-          pendingAction: null,
-          summary: "done",
-          verification: {
-            commands: [],
-            inferred: true,
-            notRunReason: "No file changes were made.",
-            passed: false,
-            ran: false,
-            runs: [],
-            selectedCommands: [],
-            skippedCommands: [],
-            status: "not_run"
-          }
-        })
+  it("deduplicates changed files and artifacts in canonical snapshots", () => {
+    expect(
+      dedupeArtifacts([
+        { diff: "a", kind: "diff", path: "src/a.ts" },
+        { diff: "b", kind: "diff", path: "src/a.ts" }
       ])
-    ).toThrow("Session event log must start with session_started.");
-  });
-
-  it("deduplicates changed files and artifacts while reducing events", () => {
-    const started = createSessionStartedEvent({
-      config: {},
-      cwd: "/workspace/project",
-      guidance: {
-        activeRules: [],
-        sources: []
-      },
-      id: "session-1",
-      mode: "exec",
-      prompt: "inspect repo",
-      repoContext: {
-        guidanceFiles: [],
-        isGitRepo: true,
-        topLevelEntries: [".git"]
-      }
-    });
-    const reduced = reduceSessionEvents([
-      started,
-      createToolResultRecordedEvent({
-        artifacts: [
-          { diff: "a", kind: "diff", path: "src/a.ts" },
-          { diff: "b", kind: "diff", path: "src/a.ts" }
-        ],
-        changedFiles: ["src/b.ts", "src/a.ts", "src/b.ts"],
-        tool: "apply_patch"
-      })
+    ).toEqual([{ diff: "b", kind: "diff", path: "src/a.ts" }]);
+    expect(normalizePaths(["src/b.ts", "src/a.ts", "src/b.ts"])).toEqual([
+      "src/a.ts",
+      "src/b.ts"
     ]);
-
-    expect(reduced?.artifacts).toEqual([{ diff: "b", kind: "diff", path: "src/a.ts" }]);
-    expect(reduced?.changedFiles).toEqual(["src/a.ts", "src/b.ts"]);
   });
 
-  it("records pending approval details from approval_requested", () => {
-    const started = createSessionStartedEvent({
-      config: {},
-      cwd: "/workspace/project",
-      guidance: {
-        activeRules: [],
-        sources: []
-      },
-      id: "session-1",
-      mode: "exec",
-      prompt: "inspect repo",
-      repoContext: {
-        guidanceFiles: [],
-        isGitRepo: true,
-        topLevelEntries: [".git"]
-      }
-    });
-    const approval = {
-      actionClass: "shell_side_effect" as const,
-      command: "npm test",
-      id: "approval-1",
-      reason: "shell_side_effect",
-      status: "pending" as const,
-      summary: "Approval required to run shell command: npm test",
-      tool: "run_shell" as const
-    };
-
-    const reduced = reduceSessionEvents([
-      started,
-      createApprovalRequestedEvent({
-        approval,
-        pendingAction: {
-          action: { command: "npm test" },
-          approval,
+  it("upserts approvals by id", () => {
+    expect(
+      upsertApproval(
+        [
+          {
+            actionClass: "shell_side_effect",
+            command: "npm test",
+            id: "approval-1",
+            reason: "shell_side_effect",
+            status: "pending",
+            summary: "Approval required to run shell command: npm test",
+            tool: "run_shell"
+          }
+        ],
+        {
+          actionClass: "shell_side_effect",
+          command: "npm test",
+          id: "approval-1",
+          reason: "shell_side_effect",
+          status: "approved",
+          summary: "Approval required to run shell command: npm test",
           tool: "run_shell"
         }
-      })
+      )
+    ).toEqual([
+      {
+        actionClass: "shell_side_effect",
+        command: "npm test",
+        id: "approval-1",
+        reason: "shell_side_effect",
+        status: "approved",
+        summary: "Approval required to run shell command: npm test",
+        tool: "run_shell"
+      }
     ]);
+  });
 
-    expect(reduced?.pendingAction?.tool).toBe("run_shell");
-    expect(reduced?.approvals).toEqual([approval]);
+  it("creates and updates canonical session records", () => {
+    const created = createSessionRecord({
+      id: "session-1",
+      input: {
+        config: {},
+        cwd: "/workspace/project",
+        mode: "exec",
+        prompt: "inspect repo",
+        repoContext: {
+          guidanceFiles: [],
+          isGitRepo: true,
+          packageScripts: {},
+          topLevelEntries: [".git"]
+        },
+        status: "paused",
+        summary: "waiting"
+      },
+      now: "2026-03-16T12:00:00.000Z"
+    });
+
+    const updated = updateSessionRecord(
+      created,
+      {
+        config: {},
+        context: created.context,
+        cwd: created.cwd,
+        guidance: created.guidance,
+        mode: created.mode,
+        prompt: created.prompt,
+        repoContext: created.repoContext,
+        state: {
+          ...created.state,
+          changedFiles: ["src/index.ts"],
+          nextActions: ["Run npm test"]
+        },
+        status: "completed",
+        summary: "done",
+        turns: [
+          {
+            at: "2026-03-16T12:00:01.000Z",
+            id: "turn-1",
+            kind: "user",
+            text: "inspect repo"
+          }
+        ]
+      },
+      "2026-03-16T12:00:02.000Z"
+    );
+
+    expect(updated.createdAt).toBe("2026-03-16T12:00:00.000Z");
+    expect(updated.updatedAt).toBe("2026-03-16T12:00:02.000Z");
+    expect(updated.state.changedFiles).toEqual(["src/index.ts"]);
+    expect(updated.turns).toHaveLength(1);
   });
 });

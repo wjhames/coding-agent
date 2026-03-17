@@ -2,15 +2,9 @@ import { describe, expect, it } from "vitest";
 import { buildExecutionContext } from "../../src/app/context-builder.js";
 
 describe("buildExecutionContext", () => {
-  it("uses compacted summaries and bounded sections in the prompt", () => {
+  it("uses conversation summaries and bounded sections in the prompt", () => {
     const context = buildExecutionContext({
       changedFiles: ["src/config.ts"],
-      compaction: {
-        changedFilesSummary: "Changed files: src/config.ts",
-        eventSummary: "Recent event flow: tool_called -> tool_result_recorded",
-        observationSummary: "Earlier observations: searched package.json | read config",
-        verificationSummary: "pass:npm test"
-      },
       cwd: "/workspace/project",
       guidance: {
         layers: [
@@ -45,27 +39,6 @@ describe("buildExecutionContext", () => {
           ]
         }
       },
-      memory: {
-        artifacts: [],
-        decisions: [
-          {
-            createdAt: "derived",
-            evidence: ["npm test"],
-            kind: "decision",
-            relevance: "high",
-            summary: "Verification passed: npm test"
-          }
-        ],
-        working: [
-          {
-            createdAt: "derived",
-            evidence: ["plan"],
-            kind: "working",
-            relevance: "high",
-            summary: "Plan: Fix the config"
-          }
-        ]
-      },
       observations: [
         {
           summary: "Read src/config.ts lines 1-20."
@@ -97,12 +70,37 @@ describe("buildExecutionContext", () => {
         ],
         topLevelEntries: [".git", "AGENTS.md", "src"]
       },
+      turns: [
+        {
+          at: "2026-03-16T12:00:00.000Z",
+          id: "turn-1",
+          kind: "user",
+          text: "fix the config"
+        },
+        {
+          at: "2026-03-16T12:00:01.000Z",
+          id: "turn-2",
+          inputSummary: "{\"path\":\"src/config.ts\"}",
+          kind: "tool_call",
+          tool: "read_file"
+        },
+        {
+          at: "2026-03-16T12:00:02.000Z",
+          changedFiles: [],
+          error: null,
+          id: "turn-3",
+          kind: "tool_result",
+          paths: ["src/config.ts"],
+          summary: "Read src/config.ts lines 1-20.",
+          tool: "read_file"
+        }
+      ],
       verificationCommands: ["npm test"]
     });
 
-    expect(context).toContain("Compaction summary:");
-    expect(context).toContain("Recent event flow: tool_called -> tool_result_recorded");
-    expect(context).toContain("Memory:");
+    expect(context).toContain("Conversation so far:");
+    expect(context).toContain("Tool call read_file");
+    expect(context).toContain("Tool result read_file");
     expect(context).toContain("Snippet from src/config.ts:");
     expect(context.length).toBeLessThanOrEqual(16_000);
   });

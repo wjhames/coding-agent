@@ -21,12 +21,13 @@ export const planItemSchema = z.object({
   status: z.enum(["pending", "in_progress", "completed"])
 });
 export const planStateSchema = z.object({
-  summary: z.string(),
-  items: z.array(planItemSchema)
+  items: z.array(planItemSchema),
+  summary: z.string()
 });
 export const repoContextSchema = z.object({
   guidanceFiles: z.array(z.string()),
   isGitRepo: z.boolean(),
+  packageScripts: z.record(z.string(), z.string()).default({}),
   topLevelEntries: z.array(z.string())
 });
 export const observationSchema = z.object({
@@ -86,18 +87,18 @@ export const patchOperationSchema = z.discriminatedUnion("type", [
   patchDeleteSchema
 ]);
 export const pendingPatchSchema = z.object({
-  approval: approvalSchema,
   action: z.object({
     operations: z.array(patchOperationSchema)
   }),
+  approval: approvalSchema,
   tool: z.literal("apply_patch")
 });
 export const pendingShellSchema = z.object({
-  approval: approvalSchema,
   action: z.object({
     command: z.string(),
     justification: z.string().optional()
   }),
+  approval: approvalSchema,
   tool: z.literal("run_shell")
 });
 export const pendingActionSchema = z.union([pendingPatchSchema, pendingShellSchema]);
@@ -143,23 +144,77 @@ export const guidanceSummarySchema = z.object({
   activeRules: z.array(z.string()),
   sources: z.array(guidanceSourceSchema)
 });
-export const memoryEntrySchema = z.object({
-  createdAt: z.string(),
-  evidence: z.array(z.string()),
-  kind: z.enum(["artifact", "decision", "working"]),
-  relevance: z.enum(["high", "medium", "low"]),
-  summary: z.string()
+export const turnTextSchema = z.object({
+  at: z.string(),
+  id: z.string(),
+  kind: z.enum(["assistant", "system_note", "user"]),
+  text: z.string()
 });
-export const memorySummarySchema = z.object({
-  artifacts: z.array(memoryEntrySchema),
-  decisions: z.array(memoryEntrySchema),
-  working: z.array(memoryEntrySchema)
+export const turnToolCallSchema = z.object({
+  at: z.string(),
+  id: z.string(),
+  inputSummary: z.string(),
+  kind: z.literal("tool_call"),
+  tool: toolNameSchema
 });
-export const compactionSummarySchema = z.object({
-  changedFilesSummary: z.string().nullable(),
-  eventSummary: z.string().nullable(),
-  observationSummary: z.string().nullable(),
-  verificationSummary: z.string().nullable()
+export const turnToolResultSchema = z.object({
+  at: z.string(),
+  changedFiles: z.array(z.string()),
+  error: z.string().nullable(),
+  id: z.string(),
+  kind: z.literal("tool_result"),
+  paths: z.array(z.string()),
+  summary: z.string(),
+  tool: toolNameSchema
+});
+export const turnRecordSchema = z.discriminatedUnion("kind", [
+  turnTextSchema,
+  turnToolCallSchema,
+  turnToolResultSchema
+]);
+export const workingSetEntrySchema = z.object({
+  path: z.string(),
+  pinned: z.boolean(),
+  reason: z.string(),
+  score: z.number(),
+  source: z.enum(["changed", "explicit", "guidance", "read", "search", "verification"])
+});
+export const contextSnippetSchema = z.object({
+  endLine: z.number().int().positive(),
+  excerpt: z.string(),
+  path: z.string(),
+  reason: z.string(),
+  startLine: z.number().int().positive()
+});
+export const contextSectionUsageSchema = z.object({
+  name: z.string(),
+  tokens: z.number().int().nonnegative()
+});
+export const contextBudgetSchema = z.object({
+  contextWindowTokens: z.number().int().positive().nullable(),
+  droppedSections: z.array(z.string()),
+  inputTokens: z.number().int().nonnegative(),
+  outputReserveTokens: z.number().int().nonnegative(),
+  remainingTokens: z.number().int().nonnegative().nullable(),
+  sections: z.array(contextSectionUsageSchema),
+  usedPercent: z.number().int().min(0).max(100).nullable()
+});
+export const contextSnapshotSchema = z.object({
+  budget: contextBudgetSchema,
+  historySummary: z.string().nullable(),
+  recentTurnCount: z.number().int().nonnegative(),
+  snippets: z.array(contextSnippetSchema),
+  workingSet: z.array(workingSetEntrySchema)
+});
+export const executionSnapshotSchema = z.object({
+  approvals: z.array(approvalSchema),
+  artifacts: z.array(artifactSchema),
+  changedFiles: z.array(z.string()),
+  nextActions: z.array(z.string()),
+  observations: z.array(observationSchema),
+  pendingAction: pendingActionSchema.nullable(),
+  plan: planStateSchema.nullable(),
+  verification: verificationSchema
 });
 export const sessionModeSchema = z.enum(["interactive", "exec"]);
 export const sessionStatusSchema = z.enum(["completed", "failed", "paused"]);
@@ -167,6 +222,7 @@ export const sessionConfigSchema = z
   .object({
     approvalPolicy: z.enum(["auto", "prompt", "never"]).optional(),
     baseUrl: z.string().url().optional(),
+    contextWindowTokens: z.number().int().positive().optional(),
     maxSteps: z.number().int().positive().optional(),
     model: z.string().optional(),
     networkEgress: z.boolean().optional(),
@@ -190,9 +246,13 @@ export type VerificationSkipped = z.infer<typeof verificationSkippedSchema>;
 export type VerificationSummary = z.infer<typeof verificationSchema>;
 export type GuidanceSource = z.infer<typeof guidanceSourceSchema>;
 export type GuidanceSummary = z.infer<typeof guidanceSummarySchema>;
-export type MemoryEntry = z.infer<typeof memoryEntrySchema>;
-export type MemorySummary = z.infer<typeof memorySummarySchema>;
-export type CompactionSummary = z.infer<typeof compactionSummarySchema>;
+export type TurnRecord = z.infer<typeof turnRecordSchema>;
+export type WorkingSetEntry = z.infer<typeof workingSetEntrySchema>;
+export type ContextSnippet = z.infer<typeof contextSnippetSchema>;
+export type ContextSectionUsage = z.infer<typeof contextSectionUsageSchema>;
+export type ContextBudget = z.infer<typeof contextBudgetSchema>;
+export type ContextSnapshot = z.infer<typeof contextSnapshotSchema>;
+export type ExecutionSnapshot = z.infer<typeof executionSnapshotSchema>;
 export type SessionMode = z.infer<typeof sessionModeSchema>;
 export type SessionStatus = z.infer<typeof sessionStatusSchema>;
 export type SessionConfig = z.infer<typeof sessionConfigSchema>;
@@ -210,29 +270,27 @@ export interface CommandResult {
   approvals: Approval[];
   artifacts: Artifact[];
   changedFiles: string[];
-  compaction: CompactionSummary;
-  eventCount: number;
-  guidance: GuidanceSummary;
-  lastEventAt: string | null;
-  memory: MemorySummary;
-  verification: VerificationSummary;
+  context: ContextSnapshot;
   exitCode: 0 | 1 | 2;
+  guidance: GuidanceSummary;
   nextActions: string[];
   observations: Observation[];
   pendingApproval: PendingApprovalInfo | null;
   plan: PlanState | null;
   repoContext: RepoContextSummary;
   resumeCommand: string | null;
+  resumedFrom?: string | null;
   sessionId: string | null;
   status: SessionStatus;
   summary: string;
-  resumedFrom?: string | null;
+  turnCount: number;
+  verification: VerificationSummary;
 }
 
 export interface CommandError {
   error: string;
-  message: string;
   exitCode: 1 | 2;
+  message: string;
   sessionId?: string | null;
 }
 
@@ -251,6 +309,11 @@ export type RuntimeEvent =
         | "resuming"
         | "verifying";
       type: "status";
+    }
+  | {
+      at: string;
+      context: ContextSnapshot;
+      type: "context_updated";
     }
   | {
       at: string;

@@ -7,6 +7,7 @@ export const profileSchema = z
     apiKey: z.string().min(1).optional(),
     approvalPolicy: approvalPolicySchema.optional(),
     baseUrl: z.string().url().optional(),
+    contextWindowTokens: z.number().int().positive().optional(),
     maxSteps: z.number().int().positive().optional(),
     model: z.string().min(1).optional(),
     networkEgress: z.boolean().optional(),

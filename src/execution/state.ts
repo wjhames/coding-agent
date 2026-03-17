@@ -1,23 +1,23 @@
 import type {
   Approval,
   Artifact,
-  CompactionSummary,
+  ContextSnapshot,
+  ExecutionSnapshot,
   GuidanceSummary,
-  MemorySummary,
   Observation,
   PlanState,
   RepoContextSummary,
+  ToolName,
+  TurnRecord,
   VerificationSummary
 } from "../runtime/contracts.js";
 import type { PendingAction } from "../app/approval.js";
-import { deriveCompaction } from "../app/compaction.js";
 import type { RepoContext } from "../app/context.js";
-import { deriveMemory } from "../app/memory.js";
-import { createCompactionUpdatedEvent, createMemoryUpdatedEvent, type SessionEvent } from "../session/events.js";
 import {
   dedupeArtifacts,
-  emptyCompactionSummary,
-  emptyMemorySummary,
+  emptyContextSnapshot,
+  emptyVerificationSummary,
+  normalizePaths,
   upsertApproval
 } from "../session/aggregate.js";
 
@@ -25,13 +25,12 @@ export interface ExecutionState {
   approvals: Approval[];
   artifacts: Artifact[];
   changedFiles: Set<string>;
-  compaction: CompactionSummary;
-  events: SessionEvent[];
+  context: ContextSnapshot;
   guidance: GuidanceSummary;
-  memory: MemorySummary;
   observations: Observation[];
   pendingAction: PendingAction | null;
   plan: PlanState | null;
+  turns: TurnRecord[];
   verification: VerificationSummary;
 }
 
@@ -39,26 +38,38 @@ export function createExecutionState(source: {
   approvals?: Approval[];
   artifacts?: Artifact[];
   changedFiles?: string[];
-  compaction?: CompactionSummary;
+  context?: ContextSnapshot;
   guidance: GuidanceSummary;
-  memory?: MemorySummary;
   observations?: Observation[];
   pendingAction?: PendingAction | null;
   plan?: PlanState | null;
-  verification: VerificationSummary;
+  turns?: TurnRecord[];
+  verification?: VerificationSummary;
 }): ExecutionState {
   return {
     approvals: source.approvals ?? [],
     artifacts: source.artifacts ?? [],
     changedFiles: new Set(source.changedFiles ?? []),
-    compaction: source.compaction ?? emptyCompactionSummary(),
-    events: [],
+    context: source.context ?? emptyContextSnapshot(),
     guidance: source.guidance,
-    memory: source.memory ?? emptyMemorySummary(),
     observations: source.observations ?? [],
     pendingAction: source.pendingAction ?? null,
     plan: source.plan ?? null,
-    verification: source.verification
+    turns: source.turns ?? [],
+    verification: source.verification ?? emptyVerificationSummary()
+  };
+}
+
+export function toExecutionSnapshot(state: ExecutionState): ExecutionSnapshot {
+  return {
+    approvals: state.approvals,
+    artifacts: state.artifacts,
+    changedFiles: changedFilesList(state),
+    nextActions: deriveNextActions(state.plan),
+    observations: state.observations,
+    pendingAction: state.pendingAction,
+    plan: state.plan,
+    verification: state.verification
   };
 }
 
@@ -80,13 +91,12 @@ export function addObservation(state: ExecutionState, observation: Observation):
   state.observations.push(observation);
 }
 
-export function syncDerivedState(state: ExecutionState): void {
-  syncMemory(state);
-  syncCompaction(state);
+export function setContextSnapshot(state: ExecutionState, context: ContextSnapshot): void {
+  state.context = context;
 }
 
 export function changedFilesList(state: ExecutionState): string[] {
-  return [...state.changedFiles];
+  return normalizePaths([...state.changedFiles]);
 }
 
 export function deriveNextActions(plan: PlanState | null): string[] {
@@ -109,8 +119,80 @@ export function toRepoContextSummary(repoContext: RepoContext): RepoContextSumma
   return {
     guidanceFiles: repoContext.guidanceFiles,
     isGitRepo: repoContext.isGitRepo,
+    packageScripts: repoContext.packageScripts,
     topLevelEntries: repoContext.topLevelEntries
   };
+}
+
+export function recordUserTurn(state: ExecutionState, text: string, at?: string): void {
+  state.turns.push({
+    at: at ?? new Date().toISOString(),
+    id: createTurnId("user"),
+    kind: "user",
+    text
+  });
+}
+
+export function recordAssistantTurn(state: ExecutionState, text: string, at?: string): void {
+  if (text.trim().length === 0) {
+    return;
+  }
+
+  state.turns.push({
+    at: at ?? new Date().toISOString(),
+    id: createTurnId("assistant"),
+    kind: "assistant",
+    text
+  });
+}
+
+export function recordSystemNote(state: ExecutionState, text: string, at?: string): void {
+  if (text.trim().length === 0) {
+    return;
+  }
+
+  state.turns.push({
+    at: at ?? new Date().toISOString(),
+    id: createTurnId("system"),
+    kind: "system_note",
+    text
+  });
+}
+
+export function recordToolCallTurn(
+  state: ExecutionState,
+  inputSummary: string,
+  tool: ToolName,
+  at?: string
+): void {
+  state.turns.push({
+    at: at ?? new Date().toISOString(),
+    id: createTurnId("tool"),
+    inputSummary,
+    kind: "tool_call",
+    tool
+  });
+}
+
+export function recordToolResultTurn(args: {
+  changedFiles?: string[];
+  error?: string | null;
+  paths?: string[];
+  state: ExecutionState;
+  summary: string;
+  tool: ToolName;
+  at?: string;
+}): void {
+  args.state.turns.push({
+    at: args.at ?? new Date().toISOString(),
+    changedFiles: normalizePaths(args.changedFiles ?? []),
+    error: args.error ?? null,
+    id: createTurnId("tool"),
+    kind: "tool_result",
+    paths: normalizePaths(args.paths ?? []),
+    summary: args.summary,
+    tool: args.tool
+  });
 }
 
 export function buildFinalSummary(
@@ -150,36 +232,6 @@ export function buildFinalSummary(
   return lines.join("\n\n");
 }
 
-function syncMemory(state: ExecutionState): void {
-  const nextMemory = deriveMemory({
-    approvals: state.approvals,
-    artifacts: state.artifacts,
-    changedFiles: changedFilesList(state),
-    observations: state.observations,
-    plan: state.plan,
-    verification: state.verification
-  });
-
-  if (JSON.stringify(state.memory) === JSON.stringify(nextMemory)) {
-    return;
-  }
-
-  state.memory = nextMemory;
-  state.events.push(createMemoryUpdatedEvent(nextMemory));
-}
-
-function syncCompaction(state: ExecutionState): void {
-  const nextCompaction = deriveCompaction({
-    changedFiles: changedFilesList(state),
-    events: state.events,
-    observations: state.observations,
-    verification: state.verification
-  });
-
-  if (JSON.stringify(state.compaction) === JSON.stringify(nextCompaction)) {
-    return;
-  }
-
-  state.compaction = nextCompaction;
-  state.events.push(createCompactionUpdatedEvent(nextCompaction));
+function createTurnId(prefix: string): string {
+  return `${prefix}:${Date.now()}:${Math.random().toString(16).slice(2, 8)}`;
 }

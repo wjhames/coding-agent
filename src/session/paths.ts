@@ -23,13 +23,6 @@ export function getSessionFilePath(
   return join(getSessionRoot(homeDir), `${sessionId}.json`);
 }
 
-export function getSessionEventsFilePath(
-  sessionId: string,
-  homeDir = os.homedir()
-): string {
-  return join(getSessionRoot(homeDir), `${sessionId}.events.jsonl`);
-}
-
 export async function ensureSessionRoot(homeDir = os.homedir()): Promise<string> {
   const sessionRoot = getSessionRoot(homeDir);
   await mkdir(sessionRoot, { recursive: true });
