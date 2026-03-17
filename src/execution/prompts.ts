@@ -1,7 +1,5 @@
-import type { SessionRecord } from "../session/aggregate.js";
 import type { ResolvedExecutionConfig } from "../config/load.js";
 import type { ExecutionState } from "./state.js";
-import { serializePlan } from "./state.js";
 
 export function buildSystemPrompt(args: {
   config: ResolvedExecutionConfig;
@@ -32,27 +30,6 @@ export function buildSystemPrompt(args: {
     "If something was not inspected, say so instead of guessing.",
     "If you make code changes, ensure verification is possible."
   ].join(" ");
-}
-
-export function buildResumePrompt(session: SessionRecord): string {
-  return [
-    session.prompt,
-    "",
-    "Resuming previous session.",
-    session.state.plan ? `Plan: ${serializePlan(session.state.plan)}` : "No stored plan.",
-    session.context.historySummary
-      ? `Earlier history: ${session.context.historySummary}`
-      : "No compacted history yet.",
-    session.state.changedFiles.length > 0
-      ? `Changed files so far: ${session.state.changedFiles.join(", ")}.`
-      : "No changed files yet.",
-    session.state.observations.length > 0
-      ? `Recent observations: ${session.state.observations
-          .slice(-5)
-          .map((observation) => observation.summary)
-          .join(" | ")}`
-      : "No prior observations."
-  ].join("\n");
 }
 
 export function isLikelyReadOnlyTask(prompt: string): boolean {

@@ -181,23 +181,25 @@ describe("interactive model", () => {
         approvals: [],
         artifacts: [],
         changedFiles: [],
-        compaction: {
-          changedFilesSummary: null,
-          eventSummary: null,
-          observationSummary: null,
-          verificationSummary: null
+        context: {
+          budget: {
+            contextWindowTokens: null,
+            droppedSections: [],
+            inputTokens: 0,
+            outputReserveTokens: 1024,
+            remainingTokens: null,
+            sections: [],
+            usedPercent: null
+          },
+          historySummary: null,
+          recentTurnCount: 0,
+          snippets: [],
+          workingSet: []
         },
-        eventCount: 0,
         exitCode: 0,
         guidance: {
           activeRules: [],
           sources: []
-        },
-        lastEventAt: null,
-        memory: {
-          artifacts: [],
-          decisions: [],
-          working: []
         },
         nextActions: [],
         observations: [],
@@ -206,12 +208,14 @@ describe("interactive model", () => {
         repoContext: {
           guidanceFiles: [],
           isGitRepo: true,
+          packageScripts: {},
           topLevelEntries: []
         },
         resumeCommand: null,
         sessionId: "abc",
         status: "completed",
         summary: "Done.",
+        turnCount: 0,
         verification: {
           commands: [],
           inferred: true,
@@ -503,23 +507,25 @@ describe("interactive model", () => {
       approvals: [],
       artifacts: [],
       changedFiles: [],
-      compaction: {
-        changedFilesSummary: null,
-        eventSummary: null,
-        observationSummary: null,
-        verificationSummary: null
+      context: {
+        budget: {
+          contextWindowTokens: null,
+          droppedSections: [],
+          inputTokens: 0,
+          outputReserveTokens: 1024,
+          remainingTokens: null,
+          sections: [],
+          usedPercent: null
+        },
+        historySummary: null,
+        recentTurnCount: 0,
+        snippets: [],
+        workingSet: []
       },
-      eventCount: 0,
       exitCode: 0,
       guidance: {
         activeRules: [],
         sources: []
-      },
-      lastEventAt: null,
-      memory: {
-        artifacts: [],
-        decisions: [],
-        working: []
       },
       nextActions: [],
       observations: [],
@@ -528,12 +534,14 @@ describe("interactive model", () => {
       repoContext: {
         guidanceFiles: [],
         isGitRepo: true,
+        packageScripts: {},
         topLevelEntries: []
       },
       resumeCommand: null,
       sessionId: "session-1",
       status: "completed",
       summary: "",
+      turnCount: 0,
       verification: {
         commands: [],
         inferred: true,
@@ -692,23 +700,25 @@ function completedResult() {
     approvals: [],
     artifacts: [],
     changedFiles: [],
-    compaction: {
-      changedFilesSummary: null,
-      eventSummary: null,
-      observationSummary: null,
-      verificationSummary: null
+    context: {
+      budget: {
+        contextWindowTokens: null,
+        droppedSections: [],
+        inputTokens: 0,
+        outputReserveTokens: 1024,
+        remainingTokens: null,
+        sections: [],
+        usedPercent: null
+      },
+      historySummary: null,
+      recentTurnCount: 0,
+      snippets: [],
+      workingSet: []
     },
-    eventCount: 0,
     exitCode: 0 as const,
     guidance: {
       activeRules: [],
       sources: []
-    },
-    lastEventAt: null,
-    memory: {
-      artifacts: [],
-      decisions: [],
-      working: []
     },
     nextActions: [],
     observations: [],
@@ -717,12 +727,14 @@ function completedResult() {
     repoContext: {
       guidanceFiles: [],
       isGitRepo: true,
+      packageScripts: {},
       topLevelEntries: []
     },
     resumeCommand: null,
     sessionId: "session-1",
     status: "completed" as const,
     summary: "Done.",
+    turnCount: 0,
     verification: {
       commands: [],
       inferred: true,

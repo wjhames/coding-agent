@@ -12,7 +12,7 @@ import type { ParsedOptions } from "../cli/parse.js";
 import { createOpenAICompatibleClient } from "../llm/openai-client.js";
 import type { CommandResult, RuntimeObserver } from "../runtime/contracts.js";
 import type { SessionRecord } from "../session/aggregate.js";
-import { emptyContextSnapshot, emptyGuidanceSummary, emptyVerificationSummary } from "../session/aggregate.js";
+import { emptyContextSnapshot, emptyVerificationSummary } from "../session/aggregate.js";
 import { resultFromSession } from "../session/mappers.js";
 import { createSession, listRecentSessions, loadSession, updateSession } from "../session/store.js";
 import { applyPatchOperations } from "../tools/apply-patch.js";
