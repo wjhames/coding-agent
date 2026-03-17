@@ -15,7 +15,11 @@ export async function executeShellCommand(args: {
   return new Promise((resolve, reject) => {
     const child = spawn("/bin/bash", ["-lc", args.command], {
       cwd: args.cwd,
-      env: process.env
+      env: {
+        ...process.env,
+        CI: process.env.CI ?? "1"
+      },
+      stdio: ["ignore", "pipe", "pipe"]
     });
 
     let stdout = "";

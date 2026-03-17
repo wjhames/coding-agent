@@ -18,12 +18,14 @@ import { createSession, listRecentSessions, loadSession, updateSession } from ".
 import { applyPatchOperations } from "../tools/apply-patch.js";
 import { runShellAction } from "../tools/run-shell.js";
 import {
+  addObservation,
   addArtifacts,
   addChangedFiles,
   buildFinalSummary,
   changedFilesList,
   createExecutionState,
   recordSystemNote,
+  recordToolResultTurn,
   recordUserTurn,
   toExecutionSnapshot,
   toRepoContextSummary,
@@ -474,36 +476,121 @@ async function executePendingAction(args: {
   args.state.approvals = args.state.approvals.map((approval) =>
     approval.id === approvalId ? { ...approval, status: "approved" as const } : approval
   );
-  recordSystemNote(args.state, `Approval approved: ${args.state.pendingAction.approval.summary}`);
+  const pendingAction = args.state.pendingAction;
+  recordSystemNote(args.state, `Approval approved: ${pendingAction.approval.summary}`);
 
-  if (args.state.pendingAction.tool === "apply_patch") {
-    await applyPatchOperations({
-      addArtifacts: (artifacts) => {
-        addArtifacts(args.state, artifacts);
-      },
-      addChangedFiles: (files) => {
-        addChangedFiles(args.state, files);
-      },
-      addObservation: (observation) => {
-        args.state.observations.push(observation);
-      },
-      cwd: args.cwd,
-      operations: args.state.pendingAction.action.operations
+  const tool = pendingAction.tool;
+  const inputSummary =
+    tool === "apply_patch"
+      ? JSON.stringify({
+          operations: pendingAction.action.operations
+        })
+      : JSON.stringify({
+          command: pendingAction.action.command,
+          ...(pendingAction.action.justification
+            ? { justification: pendingAction.action.justification }
+            : {})
+        });
+
+  emitRuntimeEvent(args.observer, {
+    at: new Date().toISOString(),
+    inputSummary,
+    tool,
+    type: "tool_called"
+  });
+  emitRuntimeEvent(args.observer, {
+    at: new Date().toISOString(),
+    ...(tool === "apply_patch" ? { detail: "Applying changes." } : { detail: "Running command." }),
+    status: tool === "apply_patch" ? "editing" : "verifying",
+    type: "status"
+  });
+
+  const beforeObservationCount = args.state.observations.length;
+  const beforeArtifactCount = args.state.artifacts.length;
+  const beforeChangedFiles = new Set(args.state.changedFiles);
+
+  try {
+    if (tool === "apply_patch") {
+      await applyPatchOperations({
+        addArtifacts: (artifacts) => {
+          addArtifacts(args.state, artifacts);
+        },
+        addChangedFiles: (files) => {
+          addChangedFiles(args.state, files);
+        },
+        addObservation: (observation) => {
+          addObservation(args.state, observation);
+        },
+        cwd: args.cwd,
+        operations: pendingAction.action.operations
+      });
+    } else {
+      await runShellAction({
+        addArtifacts: (artifacts) => {
+          addArtifacts(args.state, artifacts);
+        },
+        addChangedFiles: (files) => {
+          addChangedFiles(args.state, files);
+        },
+        addObservation: (observation) => {
+          addObservation(args.state, observation);
+        },
+        command: pendingAction.action.command,
+        cwd: args.cwd
+      });
+    }
+
+    const latestObservation = args.state.observations.at(-1);
+    const newArtifacts = args.state.artifacts.slice(beforeArtifactCount);
+    const newChangedFiles = changedFilesList(args.state).filter((path) => !beforeChangedFiles.has(path));
+    recordToolResultTurn({
+      ...(newChangedFiles.length > 0 ? { changedFiles: newChangedFiles } : {}),
+      ...(latestObservation?.path ? { paths: [latestObservation.path] } : {}),
+      state: args.state,
+      summary:
+        latestObservation?.summary ??
+        (newChangedFiles.length > 0 ? `Updated ${newChangedFiles.join(", ")}.` : `${tool} completed.`),
+      tool
     });
-  } else {
-    await runShellAction({
-      addArtifacts: (artifacts) => {
-        addArtifacts(args.state, artifacts);
-      },
-      addChangedFiles: (files) => {
-        addChangedFiles(args.state, files);
-      },
-      addObservation: (observation) => {
-        args.state.observations.push(observation);
-      },
-      command: args.state.pendingAction.action.command,
-      cwd: args.cwd
+    emitRuntimeEvent(args.observer, {
+      ...(args.state.observations.length > beforeObservationCount && latestObservation
+        ? { observation: latestObservation }
+        : {}),
+      ...(newArtifacts.length > 0 ? { artifacts: newArtifacts } : {}),
+      ...(newChangedFiles.length > 0 ? { changedFiles: newChangedFiles } : {}),
+      at: new Date().toISOString(),
+      tool,
+      type: "tool_result"
     });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Unknown tool failure.";
+    const observation =
+      tool === "run_shell" || tool === "apply_patch"
+        ? {
+            excerpt: message,
+            summary: `Tool error from ${tool}: ${message}`,
+            tool
+          }
+        : null;
+
+    if (observation) {
+      addObservation(args.state, observation);
+    }
+    recordToolResultTurn({
+      error: message,
+      state: args.state,
+      summary: observation?.summary ?? `Tool error from ${tool}: ${message}`,
+      tool
+    });
+    emitRuntimeEvent(args.observer, {
+      at: new Date().toISOString(),
+      error: message,
+      ...(observation ? { observation } : {}),
+      tool,
+      type: "tool_result"
+    });
+    args.state.pendingAction = null;
+    throw error;
   }
 
   args.state.pendingAction = null;
