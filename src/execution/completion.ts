@@ -15,6 +15,14 @@ export function sanitizeAssistantText(value: string): string {
 export function findCompletionFailureReason(value: string): string | null {
   const normalized = value.toLowerCase();
 
+  if (
+    /\bno additional approval (?:is|was) required\b/.test(normalized) ||
+    /\bapproval (?:is|was) not required\b/.test(normalized) ||
+    /\bwithout (?:needing|requiring) approval\b/.test(normalized)
+  ) {
+    return null;
+  }
+
   if (/\bremaining tasks?\b/.test(normalized)) {
     return "Assistant reported remaining tasks.";
   }

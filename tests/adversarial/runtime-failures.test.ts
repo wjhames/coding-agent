@@ -466,6 +466,78 @@ describe("adversarial runtime failures", () => {
     expect(payload.status).not.toBe("completed");
   });
 
+  it("does not fail completed work when the assistant says approval was not required", async () => {
+    const workspace = await makeWorkspace({
+      packageScripts: {
+        test: "node -e \"process.exit(0)\""
+      }
+    });
+    const llm = await createMockLlmServer([
+      toolCallResponse("apply_patch", {
+        operations: [
+          {
+            content: "module.exports = { ready: true };\n",
+            path: "backend/config.js",
+            type: "create"
+          },
+          {
+            content: "module.exports = { start() { return 'ok'; } };\n",
+            path: "backend/server.js",
+            type: "create"
+          }
+        ]
+      }),
+      finalResponse(
+        "Created backend/config.js and backend/server.js. No additional approval was required."
+      )
+    ]);
+    const homeDir = await makeHomeDir(llm.baseUrl, "auto");
+
+    const run = await runBuiltCli(
+      [
+        "exec",
+        "Create backend/config.js and backend/server.js for the backend app",
+        "--json",
+        "--cwd",
+        workspace
+      ],
+      homeDir
+    );
+    const payload = JSON.parse(run.stdout) as {
+      status: string;
+      summary: string;
+      verification: {
+        ran: boolean;
+        status: string;
+      };
+    };
+
+    if (payload.status !== "completed") {
+      await captureFailureArtifacts({
+        failure: {
+          details: JSON.stringify(
+            {
+              status: payload.status,
+              summary: payload.summary,
+              verification: payload.verification
+            },
+            null,
+            2
+          ),
+          kind: "completion_false_negative"
+        },
+        files: {
+          "workspace.json": JSON.stringify(await snapshotWorkspace(workspace), null, 2)
+        },
+        summary: payload.summary
+      });
+    }
+
+    expect(payload.verification.ran).toBe(true);
+    expect(payload.verification.status).toBe("passed");
+    expect(payload.status).toBe("completed");
+  });
+
   it("runs verification when it was explicitly requested even without code changes", async () => {
     const workspace = await makeWorkspace({
       packageScripts: {

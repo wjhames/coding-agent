@@ -1,4 +1,5 @@
 export const failureKinds = [
+  "completion_false_negative",
   "completion_false_positive",
   "context_drift",
   "destructive_recovery_loop",
