@@ -1,7 +1,7 @@
 import { buildRequestContext } from "../app/context-builder.js";
 import type { RepoContext } from "../app/context.js";
 import type { LoadedGuidance } from "../app/guidance.js";
-import { ApprovalRequiredError } from "../app/approval.js";
+import { ApprovalDeniedError, ApprovalRequiredError } from "../app/approval.js";
 import type { ResolvedExecutionConfig } from "../config/load.js";
 import { createOpenAICompatibleClient, type LlmTool } from "../llm/openai-client.js";
 import type { Observation, RuntimeObserver } from "../runtime/contracts.js";
@@ -43,6 +43,7 @@ export async function runModelLoop(args: {
     config: args.config,
     cwd: args.cwd,
     observer: args.observer,
+    readOnlyTask: args.readOnlyTask,
     state: args.state,
     verificationCommands: args.verificationCommands
   });
@@ -105,10 +106,11 @@ function createRuntimeTools(args: {
   config: ResolvedExecutionConfig;
   cwd: string;
   observer: RuntimeObserver | undefined;
+  readOnlyTask: boolean;
   state: ExecutionState;
   verificationCommands: string[];
 }): LlmTool[] {
-  return [
+  const tools: LlmTool[] = [
     createWritePlanTool({
       getPlan: () => args.state.plan,
       setPlan: (nextPlan) => {
@@ -137,7 +139,31 @@ function createRuntimeTools(args: {
       observe: (observation) => {
         addObservation(args.state, observation);
       }
-    }),
+    })
+  ];
+
+  if (!args.readOnlyTask) {
+    tools.push(...createMutableRuntimeTools(args));
+  }
+
+  return tools.map((tool) =>
+    wrapToolWithEvents({
+      observer: args.observer,
+      state: args.state,
+      tool
+    })
+  );
+}
+
+function createMutableRuntimeTools(args: {
+  config: ResolvedExecutionConfig;
+  cwd: string;
+  observer: RuntimeObserver | undefined;
+  readOnlyTask: boolean;
+  state: ExecutionState;
+  verificationCommands: string[];
+}): LlmTool[] {
+  return [
     createApplyPatchTool({
       addApproval: (approval) => {
         addApproval(args.state, approval);
@@ -174,13 +200,7 @@ function createRuntimeTools(args: {
       cwd: args.cwd,
       verificationCommands: args.verificationCommands
     })
-  ].map((tool) =>
-    wrapToolWithEvents({
-      observer: args.observer,
-      state: args.state,
-      tool
-    })
-  );
+  ];
 }
 
 function wrapToolWithEvents(args: {
@@ -240,7 +260,7 @@ function wrapToolWithEvents(args: {
         });
         return result;
       } catch (error) {
-        if (error instanceof ApprovalRequiredError) {
+        if (error instanceof ApprovalRequiredError || error instanceof ApprovalDeniedError) {
           throw error;
         }
 

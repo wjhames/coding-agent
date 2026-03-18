@@ -34,6 +34,15 @@ export function buildSystemPrompt(args: {
 
 export function isLikelyReadOnlyTask(prompt: string): boolean {
   const lowered = prompt.toLowerCase();
+
+  if (
+    /\bwithout making changes\b|\bwithout changes\b|\bdo not make changes\b|\bno changes\b/.test(
+      lowered
+    )
+  ) {
+    return true;
+  }
+
   const writeIntent = [
     "fix",
     "change",
