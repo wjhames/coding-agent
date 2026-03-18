@@ -91,7 +91,7 @@ export function createApplyPatchTool(args: {
     },
     inputSchema: applyPatchInputSchema,
     name: "apply_patch",
-    async run(input) {
+    async run(input, context) {
       const parsed = applyPatchInputSchema.parse(input);
       const approval = enforceApproval({
         action: parsed,
@@ -100,7 +100,8 @@ export function createApplyPatchTool(args: {
         reason: "file_write",
         requiresApproval: args.config.approvalPolicy !== "auto",
         summary: `Approval required to apply ${parsed.operations.length} patch operation(s).`,
-        tool: "apply_patch"
+        tool: "apply_patch",
+        toolCallId: context?.toolCallId
       });
 
       if (approval) {

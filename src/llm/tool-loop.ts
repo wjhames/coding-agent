@@ -8,7 +8,12 @@ export interface LlmTool {
   inputJsonSchema: Record<string, unknown>;
   inputSchema: z.ZodType<unknown>;
   name: string;
-  run: (input: unknown) => Promise<string> | string;
+  run: (
+    input: unknown,
+    context?: {
+      toolCallId?: string | undefined;
+    }
+  ) => Promise<string> | string;
 }
 
 export interface ToolLoopRequest {
@@ -53,7 +58,9 @@ export async function executeToolCall(args: {
 
   try {
     const parsedArgs = parseToolArguments(args.toolCall.function.arguments);
-    return await tool.run(parsedArgs);
+    return await tool.run(parsedArgs, {
+      toolCallId: args.toolCall.id
+    });
   } catch (error) {
     if (error instanceof ApprovalRequiredError) {
       throw error;

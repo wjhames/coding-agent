@@ -145,6 +145,174 @@ describe("black-box cli workflows", () => {
   );
 
   it(
+    "replays prior tool exchanges with assistant tool_calls and matching tool_call_id on resume",
+    async () => {
+      const workspace = await makeWorkspace();
+      const command = "printf 'run\\n' >> approval-runs.log";
+      const llm = await createRequestAwareMockLlmServer({
+        onRequest(request, requestIndex) {
+          if (requestIndex === 0) {
+            return toolCallResponse("run_shell", { command });
+          }
+
+          if (requestIndex === 1) {
+            const body =
+              request.body && typeof request.body === "object"
+                ? (request.body as {
+                    messages?: Array<{
+                      content?: string;
+                      role?: string;
+                      tool_call_id?: string;
+                      tool_calls?: Array<{ id?: string; function?: { name?: string } }>;
+                    }>;
+                  })
+                : {};
+            const messages = body.messages ?? [];
+            const assistantToolCall = messages.find(
+              (message) =>
+                message.role === "assistant" &&
+                message.tool_calls?.some((toolCall) => toolCall.function?.name === "run_shell")
+            );
+            const toolMessage = messages.find((message) => message.role === "tool");
+            const matchingToolCallId =
+              toolMessage?.tool_call_id &&
+              assistantToolCall?.tool_calls?.some((toolCall) => toolCall.id === toolMessage.tool_call_id);
+
+            if (!assistantToolCall || !toolMessage || !matchingToolCallId) {
+              return {
+                status: 400,
+                body: {
+                  error: {
+                    message:
+                      "messages with role \"tool\" must be a response to a preceeding message with \"tool_calls\"."
+                  }
+                }
+              };
+            }
+
+            return finalResponse("Created the file once.");
+          }
+
+          return finalResponse("Created the file once.");
+        }
+      });
+      const homeDir = await makeHomeDir(llm.baseUrl);
+
+      const paused = await runBuiltCli(
+        [
+          "exec",
+          "Create a file using the shell",
+          "--json",
+          "--cwd",
+          workspace,
+          "--approval-policy",
+          "prompt"
+        ],
+        homeDir
+      );
+
+      expect(paused.exitCode).toBe(2);
+      const pausedPayload = JSON.parse(paused.stdout);
+      expect(pausedPayload.status).toBe("paused");
+
+      const resumed = await runBuiltCli(
+        [
+          "resume",
+          pausedPayload.sessionId,
+          "--json",
+          "--approval-policy",
+          "auto"
+        ],
+        homeDir
+      );
+
+      expect(resumed.exitCode).toBe(0);
+      const resumedPayload = JSON.parse(resumed.stdout);
+      expect(resumedPayload.status).toBe("completed");
+      await expect(readFile(join(workspace, "approval-runs.log"), "utf8")).resolves.toBe("run\n");
+    },
+    20_000
+  );
+
+  it(
+    "surfaces provider 400 details in json cli errors",
+    async () => {
+      const workspace = await makeWorkspace();
+      const llm = await createMockLlmServer([
+        {
+          status: 400,
+          body: {
+            error: {
+              message:
+                "messages with role \"tool\" must be a response to a preceeding message with \"tool_calls\"."
+            }
+          }
+        }
+      ]);
+      const homeDir = await makeHomeDir(llm.baseUrl, "auto");
+
+      const run = await runBuiltCli(
+        ["exec", "Inspect the repo", "--json", "--cwd", workspace, "--max-steps", "1"],
+        homeDir
+      );
+
+      expect(run.exitCode).toBe(1);
+      const payload = JSON.parse(run.stdout || run.stderr) as {
+        error?: string;
+        message?: string;
+        summary?: string;
+      };
+      const text = payload.message ?? payload.summary ?? "";
+      expect(text).toContain("status 400");
+      expect(text).toContain("messages with role \"tool\"");
+    },
+    20_000
+  );
+
+  it(
+    "does not run verification for read-only inspection when the summary merely mentions build and tests",
+    async () => {
+      const workspace = await makeWorkspace({
+        packageScripts: {
+          build: "node -e \"process.exit(0)\"",
+          test: "node -e \"process.exit(0)\"",
+          typecheck: "node -e \"process.exit(0)\""
+        }
+      });
+      const llm = await createMockLlmServer([
+        finalResponse("This repository has build and test scripts and multiple tests under tests/ui.")
+      ]);
+      const homeDir = await makeHomeDir(llm.baseUrl, "auto");
+
+      const run = await runBuiltCli(
+        [
+          "exec",
+          "Inspect this repository and summarize the current implementation status without making changes.",
+          "--json",
+          "--cwd",
+          workspace
+        ],
+        homeDir
+      );
+      const payload = JSON.parse(run.stdout) as {
+        status: string;
+        verification: {
+          commands: string[];
+          ran: boolean;
+          status: string;
+        };
+      };
+
+      expect(run.exitCode).toBe(0);
+      expect(payload.status).toBe("completed");
+      expect(payload.verification.commands).toEqual([]);
+      expect(payload.verification.ran).toBe(false);
+      expect(payload.verification.status).toBe("not_run");
+    },
+    20_000
+  );
+
+  it(
     "runs verification exactly once after a paused patch is resumed",
     async () => {
       const workspace = await makeWorkspace({

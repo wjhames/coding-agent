@@ -190,10 +190,10 @@ function wrapToolWithEvents(args: {
 }): LlmTool {
   return {
     ...args.tool,
-    async run(input) {
+    async run(input, context) {
       const inputSummary = summarizeToolInput(input);
       const toolName = normalizeToolName(args.tool.name);
-      recordToolCallTurn(args.state, inputSummary, toolName);
+      recordToolCallTurn(args.state, inputSummary, toolName, context?.toolCallId);
       emitRuntimeEvent(args.observer, {
         at: new Date().toISOString(),
         inputSummary,
@@ -206,7 +206,7 @@ function wrapToolWithEvents(args: {
       const beforeChangedFiles = new Set(args.state.changedFiles);
 
       try {
-        const result = await args.tool.run(input);
+        const result = await args.tool.run(input, context);
         const latestObservation =
           args.state.observations.length > beforeObservationCount
             ? args.state.observations.at(-1)
@@ -217,6 +217,7 @@ function wrapToolWithEvents(args: {
         );
         recordToolResultTurn({
           ...(newChangedFiles.length > 0 ? { changedFiles: newChangedFiles } : {}),
+          content: result,
           ...(latestObservation?.path ? { paths: [latestObservation.path] } : {}),
           state: args.state,
           summary:
@@ -224,7 +225,8 @@ function wrapToolWithEvents(args: {
             (newChangedFiles.length > 0
               ? `Updated ${newChangedFiles.join(", ")}.`
               : `${toolName} completed.`),
-          tool: toolName
+          tool: toolName,
+          ...(context?.toolCallId ? { toolCallId: context.toolCallId } : {})
         });
         emitRuntimeEvent(args.observer, {
           ...(args.state.observations.length > beforeObservationCount && latestObservation
@@ -261,7 +263,8 @@ function wrapToolWithEvents(args: {
           ...("path" in (observation ?? {}) && observation?.path ? { paths: [observation.path] } : {}),
           state: args.state,
           summary: observation?.summary ?? `Tool error from ${args.tool.name}: ${message}`,
-          tool: toolName
+          tool: toolName,
+          ...(context?.toolCallId ? { toolCallId: context.toolCallId } : {})
         });
         emitRuntimeEvent(args.observer, {
           at: new Date().toISOString(),

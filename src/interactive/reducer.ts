@@ -65,11 +65,7 @@ export function applyRuntimeEventToModel(
         scrollOffset: state.scrollOffset
       }, formatApprovalLines(event.approval, event.pendingAction), `approval:${event.at}`);
     case "approval_resolved":
-      return {
-        ...state,
-        liveStatusLabel: event.status === "approved" ? "Approval granted" : "Approval rejected",
-        pendingApproval: null
-      };
+      return appendApprovalResolutionFeedback(state, event.status);
     case "verification_started":
       return appendActivity(state, {
         bucket: "verification",

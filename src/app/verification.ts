@@ -53,7 +53,7 @@ export function planVerificationCommands(args: {
   const skippedCommands = new Map<string, string>();
   const changedFilesMade = args.changedFiles.length > 0;
   const promptIntent = detectVerificationIntent(args.prompt);
-  const summaryIntent = detectVerificationIntent(args.assistantSummary ?? "");
+  const summaryIntent = detectAssistantVerificationIntent(args.assistantSummary ?? "");
   const requestedScripts = new Set<string>([
     ...promptIntent.scripts,
     ...summaryIntent.scripts
@@ -188,4 +188,24 @@ function detectVerificationIntent(text: string): {
       ),
     scripts
   };
+}
+
+function detectAssistantVerificationIntent(text: string): {
+  generic: boolean;
+  scripts: string[];
+} {
+  const normalized = text.toLowerCase();
+  const mentionsVerification =
+    /\b(?:verify|verified|verification|validate|validated|passed|failed|running|ran|run)\b/.test(
+      normalized
+    );
+
+  if (!mentionsVerification) {
+    return {
+      generic: false,
+      scripts: []
+    };
+  }
+
+  return detectVerificationIntent(text);
 }

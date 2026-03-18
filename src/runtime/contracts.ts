@@ -91,7 +91,8 @@ export const pendingPatchSchema = z.object({
     operations: z.array(patchOperationSchema)
   }),
   approval: approvalSchema,
-  tool: z.literal("apply_patch")
+  tool: z.literal("apply_patch"),
+  toolCallId: z.string().optional()
 });
 export const pendingShellSchema = z.object({
   action: z.object({
@@ -99,7 +100,8 @@ export const pendingShellSchema = z.object({
     justification: z.string().optional()
   }),
   approval: approvalSchema,
-  tool: z.literal("run_shell")
+  tool: z.literal("run_shell"),
+  toolCallId: z.string().optional()
 });
 export const pendingActionSchema = z.union([pendingPatchSchema, pendingShellSchema]);
 export const verificationRunSchema = z.object({
@@ -155,17 +157,20 @@ export const turnToolCallSchema = z.object({
   id: z.string(),
   inputSummary: z.string(),
   kind: z.literal("tool_call"),
-  tool: toolNameSchema
+  tool: toolNameSchema,
+  toolCallId: z.string().optional()
 });
 export const turnToolResultSchema = z.object({
   at: z.string(),
   changedFiles: z.array(z.string()),
+  content: z.string().optional(),
   error: z.string().nullable(),
   id: z.string(),
   kind: z.literal("tool_result"),
   paths: z.array(z.string()),
   summary: z.string(),
-  tool: toolNameSchema
+  tool: toolNameSchema,
+  toolCallId: z.string().optional()
 });
 export const turnRecordSchema = z.discriminatedUnion("kind", [
   turnTextSchema,

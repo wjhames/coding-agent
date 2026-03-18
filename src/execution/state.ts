@@ -183,6 +183,7 @@ export function recordToolCallTurn(
   state: ExecutionState,
   inputSummary: string,
   tool: ToolName,
+  toolCallId?: string,
   at?: string
 ): void {
   state.turns.push({
@@ -190,28 +191,33 @@ export function recordToolCallTurn(
     id: createTurnId("tool"),
     inputSummary,
     kind: "tool_call",
-    tool
+    tool,
+    ...(toolCallId ? { toolCallId } : {})
   });
 }
 
 export function recordToolResultTurn(args: {
   changedFiles?: string[];
+  content?: string | null;
   error?: string | null;
   paths?: string[];
   state: ExecutionState;
   summary: string;
   tool: ToolName;
+  toolCallId?: string;
   at?: string;
 }): void {
   args.state.turns.push({
     at: args.at ?? new Date().toISOString(),
     changedFiles: normalizePaths(args.changedFiles ?? []),
+    ...(args.content ? { content: args.content } : {}),
     error: args.error ?? null,
     id: createTurnId("tool"),
     kind: "tool_result",
     paths: normalizePaths(args.paths ?? []),
     summary: args.summary,
-    tool: args.tool
+    tool: args.tool,
+    ...(args.toolCallId ? { toolCallId: args.toolCallId } : {})
   });
 }
 

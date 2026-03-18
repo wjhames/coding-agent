@@ -88,9 +88,7 @@ export async function sendRequest(args: {
   );
 
   if (!response.ok) {
-    throw new LlmError(
-      `OpenAI-compatible request failed with status ${response.status}.`
-    );
+    throw new LlmError(await buildTransportErrorMessage(response));
   }
 
   return chatCompletionResponseSchema.parse(await response.json());
@@ -136,10 +134,36 @@ export async function sendStreamingRequest(args: {
   );
 
   if (!response.ok) {
-    throw new LlmError(
-      `OpenAI-compatible request failed with status ${response.status}.`
-    );
+    throw new LlmError(await buildTransportErrorMessage(response));
   }
 
   return response;
+}
+
+async function buildTransportErrorMessage(response: Response): Promise<string> {
+  const prefix = `OpenAI-compatible request failed with status ${response.status}.`;
+
+  try {
+    const raw = await response.text();
+
+    if (!raw.trim()) {
+      return prefix;
+    }
+
+    const contentType = response.headers.get("content-type") ?? "";
+    if (contentType.includes("application/json")) {
+      const parsed = JSON.parse(raw) as {
+        error?: {
+          message?: string;
+        };
+        message?: string;
+      };
+      const detail = parsed.error?.message ?? parsed.message ?? raw.trim();
+      return `${prefix} ${detail}`;
+    }
+
+    return `${prefix} ${raw.trim()}`;
+  } catch {
+    return prefix;
+  }
 }

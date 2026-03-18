@@ -57,7 +57,7 @@ export function createRunShellTool(args: {
     },
     inputSchema: runShellInputSchema,
     name: "run_shell",
-    async run(input) {
+    async run(input, context) {
       const parsed = runShellInputSchema.parse(input);
 
       if (isShellCommandDangerous(parsed.command)) {
@@ -86,7 +86,8 @@ export function createRunShellTool(args: {
         reason: "shell_side_effect",
         requiresApproval,
         summary: `Approval required to run shell command: ${parsed.command}`,
-        tool: "run_shell"
+        tool: "run_shell",
+        toolCallId: context?.toolCallId
       });
 
       if (approval) {

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { emptyContextSnapshot, emptyGuidanceSummary } from "../../src/session/aggregate.js";
-import { applyCommandResultToModel } from "../../src/interactive/reducer.js";
+import { applyCommandResultToModel, applyRuntimeEventToModel } from "../../src/interactive/reducer.js";
 import { createInteractiveModel } from "../../src/interactive/state.js";
 import type { CommandResult } from "../../src/runtime/contracts.js";
 
@@ -140,5 +140,74 @@ describe("interactive reducer", () => {
     expect(approvalBlock).toBeDefined();
     expect(approvalBlock!.lines).toContain("Approval required to run shell command");
     expect(approvalBlock!.lines).toContain("Command: printf 'created' > created.txt");
+  });
+
+  it("records approval resolution feedback when the runtime emits approval_resolved", () => {
+    const initial = createInteractiveModel({
+      cwd: "/tmp/workspace",
+      doctor: null,
+      recentSessions: []
+    });
+    const paused = applyCommandResultToModel(initial, {
+      approvals: [
+        {
+          actionClass: "shell_side_effect",
+          command: "printf 'created' > created.txt",
+          id: "approval-1",
+          reason: "shell_side_effect",
+          status: "pending",
+          summary: "Approval required to run shell command",
+          tool: "run_shell"
+        }
+      ],
+      artifacts: [],
+      changedFiles: [],
+      context: emptyContextSnapshot(),
+      exitCode: 2,
+      guidance: emptyGuidanceSummary(),
+      nextActions: [],
+      observations: [],
+      pendingApproval: {
+        actionClass: "shell_side_effect",
+        command: "printf 'created' > created.txt",
+        reason: "shell_side_effect",
+        summary: "Approval required to run shell command",
+        tool: "run_shell"
+      },
+      plan: null,
+      repoContext: {
+        guidanceFiles: [],
+        isGitRepo: true,
+        packageScripts: {},
+        topLevelEntries: ["package.json"]
+      },
+      resumeCommand: "coding-agent resume session-1 --approval-policy auto",
+      sessionId: "session-1",
+      status: "paused",
+      summary: "Approval required to run shell command",
+      turnCount: 2,
+      verification: {
+        commands: [],
+        inferred: true,
+        notRunReason: "Verification has not run yet.",
+        passed: false,
+        ran: false,
+        runs: [],
+        selectedCommands: [],
+        skippedCommands: [],
+        status: "not_run"
+      }
+    });
+
+    const next = applyRuntimeEventToModel(paused, {
+      approvalId: "approval-1",
+      at: "2026-03-18T00:00:00.000Z",
+      status: "approved",
+      type: "approval_resolved"
+    });
+    const lines = next.blocks.flatMap((block) => block.lines);
+
+    expect(next.pendingApproval).toBeNull();
+    expect(lines).toContain("Approval approved.");
   });
 });

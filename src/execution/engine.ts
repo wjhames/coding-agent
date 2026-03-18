@@ -560,8 +560,10 @@ async function executePendingAction(args: {
   const beforeChangedFiles = new Set(args.state.changedFiles);
 
   try {
+    let resultContent: string;
+
     if (tool === "apply_patch") {
-      await applyPatchOperations({
+      resultContent = await applyPatchOperations({
         addArtifacts: (artifacts) => {
           addArtifacts(args.state, artifacts);
         },
@@ -575,7 +577,7 @@ async function executePendingAction(args: {
         operations: pendingAction.action.operations
       });
     } else {
-      await runShellAction({
+      resultContent = await runShellAction({
         addArtifacts: (artifacts) => {
           addArtifacts(args.state, artifacts);
         },
@@ -601,12 +603,14 @@ async function executePendingAction(args: {
     const newChangedFiles = changedFilesList(args.state).filter((path) => !beforeChangedFiles.has(path));
     recordToolResultTurn({
       ...(newChangedFiles.length > 0 ? { changedFiles: newChangedFiles } : {}),
+      content: resultContent,
       ...(latestObservation?.path ? { paths: [latestObservation.path] } : {}),
       state: args.state,
       summary:
         latestObservation?.summary ??
         (newChangedFiles.length > 0 ? `Updated ${newChangedFiles.join(", ")}.` : `${tool} completed.`),
-      tool
+      tool,
+      ...(pendingAction.toolCallId ? { toolCallId: pendingAction.toolCallId } : {})
     });
     emitRuntimeEvent(args.observer, {
       ...(args.state.observations.length > beforeObservationCount && latestObservation
@@ -636,7 +640,8 @@ async function executePendingAction(args: {
       error: message,
       state: args.state,
       summary: observation?.summary ?? `Tool error from ${tool}: ${message}`,
-      tool
+      tool,
+      ...(pendingAction.toolCallId ? { toolCallId: pendingAction.toolCallId } : {})
     });
     emitRuntimeEvent(args.observer, {
       at: new Date().toISOString(),

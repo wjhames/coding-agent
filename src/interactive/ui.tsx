@@ -198,7 +198,7 @@ export function InteractiveApp(props: {
       scrollOffset: 0
     }));
     await new Promise((resolve) => {
-      setTimeout(resolve, 50);
+      setTimeout(resolve, 120);
     });
 
     const observer = {

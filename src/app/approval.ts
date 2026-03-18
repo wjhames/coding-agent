@@ -28,6 +28,7 @@ export function enforceApproval(args: {
   tool: "apply_patch" | "run_shell";
   action: PendingAction["action"];
   requiresApproval: boolean;
+  toolCallId?: string | undefined;
 }): Approval | null {
   if (!args.requiresApproval) {
     return null;
@@ -43,7 +44,8 @@ export function enforceApproval(args: {
   const pendingAction = {
     action: args.action,
     approval,
-    tool: args.tool
+    tool: args.tool,
+    ...(args.toolCallId ? { toolCallId: args.toolCallId } : {})
   } as PendingAction;
 
   if (args.config.approvalPolicy === "never") {

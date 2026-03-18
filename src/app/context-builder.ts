@@ -15,6 +15,16 @@ export interface ModelMessage {
   content: string;
   role: "assistant" | "system" | "tool" | "user";
   tool_call_id?: string | undefined;
+  tool_calls?:
+    | Array<{
+        function: {
+          arguments: string;
+          name: string;
+        };
+        id: string;
+        type: "function";
+      }>
+    | undefined;
 }
 
 export async function buildRequestContext(args: {
@@ -248,29 +258,54 @@ function collectRecentConversationTurns(turns: TurnRecord[]): {
 } {
   const rawTurns = turns.slice(-12);
   const recent = rawTurns.slice(-8);
+  const messages: ModelMessage[] = [];
+
+  for (const turn of recent) {
+    if (turn.kind === "assistant" || turn.kind === "user") {
+      messages.push({
+        content: turn.text,
+        role: turn.kind === "assistant" ? "assistant" : "user"
+      });
+      continue;
+    }
+
+    if (turn.kind === "tool_call") {
+      if (!turn.toolCallId) {
+        continue;
+      }
+
+      messages.push({
+        content: "",
+        role: "assistant",
+        tool_calls: [
+          {
+            function: {
+              arguments: turn.inputSummary,
+              name: turn.tool
+            },
+            id: turn.toolCallId,
+            type: "function"
+          }
+        ]
+      });
+      continue;
+    }
+
+    if (turn.kind === "tool_result") {
+      if (!turn.toolCallId || turn.content === undefined) {
+        continue;
+      }
+
+      messages.push({
+        content: turn.content,
+        role: "tool",
+        tool_call_id: turn.toolCallId
+      });
+    }
+  }
 
   return {
-    messages: recent.flatMap<ModelMessage>((turn) => {
-      if (turn.kind === "assistant" || turn.kind === "user") {
-        return [
-          {
-            content: turn.text,
-            role: turn.kind === "assistant" ? "assistant" : "user"
-          } satisfies ModelMessage
-        ];
-      }
-
-      if (turn.kind === "tool_result") {
-        return [
-          {
-            content: turn.error ? `Tool error: ${turn.error}` : turn.summary,
-            role: "tool"
-          } satisfies ModelMessage
-        ];
-      }
-
-      return [];
-    }),
+    messages,
     rawCount: recent.length
   };
 }

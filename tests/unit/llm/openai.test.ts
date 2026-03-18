@@ -149,9 +149,22 @@ describe("createOpenAICompatibleClient", () => {
     ).resolves.toBe("first second");
   });
 
-  it("raises a typed error on a non-2xx response", async () => {
+  it("raises a typed error with provider details on a non-2xx response", async () => {
     const fetchImpl = vi.fn().mockResolvedValue(
-      new Response("upstream error", { status: 500 })
+      new Response(
+        JSON.stringify({
+          error: {
+            message:
+              "messages with role \"tool\" must be a response to a preceeding message with \"tool_calls\"."
+          }
+        }),
+        {
+          status: 400,
+          headers: {
+            "content-type": "application/json"
+          }
+        }
+      )
     );
 
     const client = createOpenAICompatibleClient({
@@ -161,12 +174,17 @@ describe("createOpenAICompatibleClient", () => {
       model: "gpt-4.1-mini"
     });
 
-    await expect(
-      client.complete({
+    const error = await client
+      .complete({
         systemPrompt: "system",
         userPrompt: "user"
       })
-    ).rejects.toBeInstanceOf(LlmError);
+      .catch((caught) => caught);
+
+    expect(error).toBeInstanceOf(LlmError);
+    expect(error).toMatchObject({
+      message: expect.stringContaining("messages with role \"tool\"")
+    });
   });
 
   it("runs tool calls before returning the final assistant text", async () => {
@@ -273,15 +291,20 @@ describe("createOpenAICompatibleClient", () => {
       text: "Plan is ready."
     });
 
-    expect(run).toHaveBeenCalledWith({
-      items: [
-        {
-          content: "Inspect files",
-          status: "in_progress"
-        }
-      ],
-      summary: "Plan summary"
-    });
+    expect(run).toHaveBeenCalledWith(
+      {
+        items: [
+          {
+            content: "Inspect files",
+            status: "in_progress"
+          }
+        ],
+        summary: "Plan summary"
+      },
+      {
+        toolCallId: "call-1"
+      }
+    );
   });
 
   it("forces a final answer after hitting the tool round cap", async () => {
@@ -577,6 +600,11 @@ describe("createOpenAICompatibleClient", () => {
       })
     ).resolves.toEqual({ text: "Done." });
 
-    expect(run).toHaveBeenCalledWith({ path: "src/config.ts" });
+    expect(run).toHaveBeenCalledWith(
+      { path: "src/config.ts" },
+      {
+        toolCallId: "call-1"
+      }
+    );
   });
 });
