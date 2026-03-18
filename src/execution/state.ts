@@ -77,10 +77,28 @@ export function toExecutionSnapshot(state: ExecutionState): ExecutionSnapshot {
 }
 
 export function addChangedFiles(state: ExecutionState, files: string[]): void {
+  let hasNewFile = false;
+
   for (const file of files) {
+    if (!state.changedFiles.has(file)) {
+      hasNewFile = true;
+    }
+
     state.changedFiles.add(file);
     state.turnChangedFiles.add(file);
   }
+
+  if (!hasNewFile) {
+    return;
+  }
+
+  state.verification = {
+    ...state.verification,
+    notRunReason: "Verification has not run yet.",
+    passed: false,
+    ran: false,
+    status: "not_run"
+  };
 }
 
 export function addArtifacts(state: ExecutionState, artifacts: Artifact[]): void {

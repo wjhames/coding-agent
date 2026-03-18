@@ -22,6 +22,8 @@ export async function runVerificationCycle(args: {
   verificationCommands: string[];
 }): Promise<{ summary: string }> {
   let summary = "";
+  const shouldForceVerificationPass =
+    args.state.verification.status === "not_run" || args.state.verification.ran === false;
 
   args.state.verification = summarizeVerificationEvidence({
     commands: args.verificationCommands,
@@ -33,7 +35,7 @@ export async function runVerificationCycle(args: {
     return { summary };
   }
 
-  if (args.state.verification.status === "not_run") {
+  if (shouldForceVerificationPass || args.state.verification.status === "not_run") {
     await runVerificationPass({
       commands: args.verificationCommands,
       cwd: args.cwd,
