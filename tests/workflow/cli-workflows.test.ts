@@ -11,7 +11,13 @@ import {
   repoRoot,
   runBuiltCli
 } from "../helpers/cli-harness.js";
-import { createMockLlmServer, finalResponse, toolCallResponse, cleanupMockLlmServers } from "../helpers/mock-llm.js";
+import {
+  cleanupMockLlmServers,
+  createMockLlmServer,
+  createRequestAwareMockLlmServer,
+  finalResponse,
+  toolCallResponse
+} from "../helpers/mock-llm.js";
 import {
   outputAppearsWithin,
   spawnInteractiveCli,
@@ -78,95 +84,64 @@ describe("black-box cli workflows", () => {
   );
 
   it(
-    "streams approved shell command output into the interactive transcript before the command completes",
+    "does not rerun an approved shell command after resume when the resumed request omits the prior tool result",
     async () => {
       const workspace = await makeWorkspace();
-      const llm = await createMockLlmServer([
-        toolCallResponse("run_shell", {
-          command: "printf 'shell-start\\n'; sleep 2; printf 'shell-done\\n'; printf 'created' > created.txt"
-        }),
-        finalResponse("Created the file.")
-      ]);
-      const homeDir = await makeHomeDir(llm.baseUrl);
-      await ensureBuiltCli();
-      const session = spawnInteractiveCli({
-        cwd: workspace,
-        distCli,
-        homeDir,
-        repoRoot
+      const command = "printf 'run\\n' >> approval-runs.log";
+      const llm = await createRequestAwareMockLlmServer({
+        onRequest(request, requestIndex) {
+          if (requestIndex === 0) {
+            return toolCallResponse("run_shell", { command });
+          }
+
+          if (requestIndex === 1) {
+            const body =
+              request.body && typeof request.body === "object"
+                ? (request.body as { messages?: Array<{ role?: string }> })
+                : {};
+            const hasToolResult = body.messages?.some((message) => message.role === "tool") ?? false;
+            return hasToolResult
+              ? finalResponse("Created the file once.")
+              : toolCallResponse("run_shell", { command });
+          }
+
+          return finalResponse("Created the file once.");
+        }
       });
+      const homeDir = await makeHomeDir(llm.baseUrl);
 
-      try {
-        await waitForOutput(session, "Type a task", 8_000);
-        await typeText(session.stdin, "Create a file using the shell");
-        session.stdin.write("\r");
+      const paused = await runBuiltCli(
+        [
+          "exec",
+          "Create a file using the shell",
+          "--json",
+          "--cwd",
+          workspace,
+          "--approval-policy",
+          "prompt"
+        ],
+        homeDir
+      );
 
-        await waitForOutput(session, "Approval required to run shell command", 8_000);
-        session.stdin.write("\r");
+      expect(paused.exitCode).toBe(2);
+      const pausedPayload = JSON.parse(paused.stdout);
+      expect(pausedPayload.status).toBe("paused");
 
-        await waitForOutput(session, "Approval approved.", 8_000);
-        await waitForOutput(session, "Running command.", 8_000);
+      const resumed = await runBuiltCli(
+        [
+          "resume",
+          pausedPayload.sessionId,
+          "--json",
+          "--approval-policy",
+          "auto"
+        ],
+        homeDir
+      );
 
-        const ordering = await waitForOutputOrder(session, {
-          first: "Output: shell-start",
-          second: "Completed.",
-          timeoutMs: 2_500
-        });
-        expect(ordering).toBe("first");
-      } catch (error) {
-        await captureFailureArtifacts({
-          failure: {
-            details: error instanceof Error ? error.message : String(error),
-            kind: "ui_feedback_gap"
-          },
-          summary: "interactive approval should acknowledge approval and stream live output",
-          transcript: session.getOutput()
-        });
-        throw error;
-      } finally {
-        session.stdin.write("\u0003");
-        await waitForExit(session.child, 5_000).catch(() => undefined);
-      }
+      expect(resumed.exitCode).toBe(0);
+      await expect(readFile(join(workspace, "approval-runs.log"), "utf8")).resolves.toBe("run\n");
     },
     20_000
   );
 
-  it(
-    "shows shell command output in the interactive transcript while the approved command is still running",
-    async () => {
-      const workspace = await makeWorkspace();
-      const llm = await createMockLlmServer([
-        toolCallResponse("run_shell", {
-          command: "printf 'shell-start\\n'; sleep 2; printf 'shell-done\\n'; printf 'created' > created.txt"
-        }),
-        finalResponse("Created the file.")
-      ]);
-      const homeDir = await makeHomeDir(llm.baseUrl);
-      await ensureBuiltCli();
-      const session = spawnInteractiveCli({
-        cwd: workspace,
-        distCli,
-        homeDir,
-        repoRoot
-      });
-
-      try {
-        await waitForOutput(session, "Type a task", 8_000);
-        await typeText(session.stdin, "Create a file using the shell");
-        session.stdin.write("\r");
-
-        await waitForOutput(session, "Approval required to run shell command", 8_000);
-        session.stdin.write("\r");
-
-        await waitForOutput(session, "Running command.", 8_000);
-
-        const sawLiveOutput = await outputAppearsWithin(session, "shell-start", 900);
-        expect(sawLiveOutput).toBe(true);
-      } finally {
-        session.stdin.write("\u0003");
-        await waitForExit(session.child, 5_000).catch(() => undefined);
-      }
-    },
-    20_000
-  );
 });

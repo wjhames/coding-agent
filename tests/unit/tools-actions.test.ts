@@ -176,6 +176,36 @@ describe("action tools", () => {
     ).resolves.toContain("\"exitCode\":0");
   });
 
+  it("rejects shell commands that write outside the workspace", async () => {
+    const cwd = await makeWorkspace();
+    const outsideDir = await mkdtemp(join(os.tmpdir(), "coding-agent-action-outside-"));
+    tempDirs.push(outsideDir);
+    const outsidePath = join(outsideDir, "escape.txt");
+    const tool = createRunShellTool({
+      addApproval: () => undefined,
+      addArtifacts: () => undefined,
+      addChangedFiles: () => undefined,
+      addObservation: () => undefined,
+      config: {
+        approvalPolicy: "auto",
+        baseUrl: "http://localhost:1234/v1",
+        maxSteps: 8,
+        model: "gpt-4.1-mini",
+        networkEgress: false,
+        profileName: "local",
+        timeout: undefined
+      },
+      cwd,
+      verificationCommands: []
+    });
+
+    await expect(
+      tool.run({
+        command: `printf 'escaped' > '${outsidePath}'`
+      })
+    ).rejects.toThrow("outside the workspace");
+  });
+
   it("fails patch deletes when the target file is missing", async () => {
     const cwd = await makeWorkspace();
     const tool = createApplyPatchTool({
