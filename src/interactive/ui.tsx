@@ -197,6 +197,9 @@ export function InteractiveApp(props: {
       runtimeStatus: "resuming",
       scrollOffset: 0
     }));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 50);
+    });
 
     const observer = {
       onEvent(event: RuntimeEvent) {

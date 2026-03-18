@@ -180,16 +180,27 @@ function renderApprovalBlock(
   width: number,
   options: string | null
 ): RenderLine[] {
-  const lines: RenderLine[] = [
-    {
-      bold: true,
-      color: "yellow",
-      text: "• Approval needed"
-    }
-  ];
+  const [summaryLine, ...detailLines] = block.lines;
+  const lines: RenderLine[] = [];
 
-  for (const rawLine of [...block.lines, ...(options ? [options] : [])]) {
+  for (const rawLine of detailLines) {
     for (const line of wrapForRender(rawLine, width - 4)) {
+      lines.push({
+        backgroundColor: "#332500",
+        color: "#f7d774",
+        text: ` ${padLine(line, width - 2)} `
+      });
+    }
+  }
+
+  lines.push({
+    bold: true,
+    color: "yellow",
+    text: summaryLine ?? "• Approval needed"
+  });
+
+  if (options) {
+    for (const line of wrapForRender(options, width - 4)) {
       lines.push({
         backgroundColor: "#332500",
         color: "#f7d774",

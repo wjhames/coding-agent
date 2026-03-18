@@ -55,33 +55,21 @@ export function applyRuntimeEventToModel(
     case "tool_result":
       return applyToolResultEvent(state, event);
     case "approval_requested":
-      return {
+      return appendPendingApprovalBlock({
         ...state,
         approvalChoiceIndex: 0,
         liveStatusLabel: "Waiting for approval",
         pendingApproval: toPendingApproval(event.approval, event.pendingAction),
         runtimeStatus: "paused",
         approvals: upsertApproval(state.approvals, event.approval),
-        blocks: [
-          ...state.blocks,
-          {
-            id: `approval:${event.at}`,
-            kind: "approval",
-            lines: formatApprovalLines(event.approval, event.pendingAction),
-            tone: "warning"
-          }
-        ],
         scrollOffset: state.scrollOffset
-      };
+      }, formatApprovalLines(event.approval, event.pendingAction), `approval:${event.at}`);
     case "approval_resolved":
-      return appendApprovalResolutionFeedback(
-        {
-          ...state,
-          liveStatusLabel: event.status === "approved" ? "Approval granted" : "Approval rejected",
-          pendingApproval: null
-        },
-        event.status
-      );
+      return {
+        ...state,
+        liveStatusLabel: event.status === "approved" ? "Approval granted" : "Approval rejected",
+        pendingApproval: null
+      };
     case "verification_started":
       return appendActivity(state, {
         bucket: "verification",
@@ -153,25 +141,26 @@ export function applyCommandResultToModel(
     verification: result.verification
   };
 
+  if (result.status === "paused" && result.pendingApproval) {
+    next = appendPendingApprovalBlock(
+      {
+        ...next,
+        approvalChoiceIndex: 0,
+        liveStatusLabel: "Waiting for approval"
+      },
+      formatPendingApprovalInfoLines(result.pendingApproval),
+      `approval:result:${result.sessionId ?? Date.now()}`
+    );
+  }
+
   if (result.status === "failed") {
     next = settleAssistantBlocks(next);
     next = appendSystemLine(next, result.summary, "warning");
   } else if (
     result.status === "completed" &&
-    result.summary.trim().length > 0 &&
-    lastAssistantText(next) === null
+    result.summary.trim().length > 0
   ) {
-    next = {
-      ...appendSettledAssistantMessage(next, result.summary, `result:${Date.now()}`),
-      approvals: next.approvals,
-      artifacts: next.artifacts,
-      changedFiles: next.changedFiles,
-      pendingApproval: next.pendingApproval,
-      plan: next.plan,
-      runtimeStatus: next.runtimeStatus,
-      sessionId: next.sessionId,
-      verification: next.verification
-    };
+    next = appendFinalAssistantSummary(next, result.summary, `result:${Date.now()}`);
   } else {
     next = settleAssistantBlocks(next);
   }
@@ -432,6 +421,77 @@ function appendCompletionLine(state: InteractiveModel, result: CommandResult): I
   );
 }
 
+function appendPendingApprovalBlock(
+  state: InteractiveModel,
+  lines: string[],
+  id: string
+): InteractiveModel {
+  if (hasApprovalBlock(state, lines)) {
+    return state;
+  }
+
+  return {
+    ...state,
+    blocks: [
+      ...state.blocks,
+      {
+        id,
+        kind: "approval",
+        lines,
+        tone: "warning"
+      }
+    ],
+    scrollOffset: state.scrollOffset
+  };
+}
+
+function appendFinalAssistantSummary(
+  state: InteractiveModel,
+  text: string,
+  suffix: string
+): InteractiveModel {
+  const summaryText = summarizeForInteractiveTranscript(text);
+  const settled = removeTrailingCompletionSystemLine(settleAssistantBlocks(state));
+  const lastAssistantIndex = findLastAssistantIndex(settled);
+  const lastText =
+    lastAssistantIndex >= 0 ? settled.blocks[lastAssistantIndex]?.lines.join("\n").trim() ?? null : null;
+  const shouldReplaceLastAssistant =
+    lastAssistantIndex >= 0 &&
+    lastText !== null &&
+    (summaryText === lastText ||
+      summaryText.startsWith(lastText) ||
+      lastText.startsWith(summaryText));
+
+  const blocks = shouldReplaceLastAssistant
+    ? [
+        ...settled.blocks.slice(0, lastAssistantIndex),
+        ...settled.blocks.slice(lastAssistantIndex + 1)
+      ]
+    : settled.blocks;
+  const lastBlock = blocks.at(-1);
+
+  if (lastBlock?.kind === "assistant" && lastBlock.lines.join("\n").trim() === summaryText.trim()) {
+    return {
+      ...settled,
+      blocks
+    };
+  }
+
+  return {
+    ...settled,
+    blocks: [
+      ...blocks,
+      {
+        id: `assistant:${suffix}`,
+        kind: "assistant",
+        lines: summaryText.split("\n"),
+        streaming: false,
+        tone: "default"
+      }
+    ]
+  };
+}
+
 function toolCalledToActivity(
   tool: Exclude<ToolName, "write_plan">,
   inputSummary: string,
@@ -620,12 +680,7 @@ function formatApprovalLines(
     tool: "apply_patch" | "run_shell";
   }
 ): string[] {
-  const lines = [
-    approval.summary,
-    `Tool: ${pendingAction.tool}`,
-    `Class: ${approval.actionClass}`,
-    `Reason: ${approval.reason}`
-  ];
+  const lines = [approval.summary];
 
   if (pendingAction.tool === "run_shell" && pendingAction.action.command) {
     lines.push(`Command: ${pendingAction.action.command}`);
@@ -633,6 +688,20 @@ function formatApprovalLines(
 
   if (pendingAction.tool === "apply_patch") {
     lines.push(`Patch operations: ${pendingAction.action.operations?.length ?? 0}`);
+  }
+
+  return lines;
+}
+
+function formatPendingApprovalInfoLines(pendingApproval: PendingApprovalInfo): string[] {
+  const lines = [pendingApproval.summary];
+
+  if (pendingApproval.tool === "run_shell" && pendingApproval.command) {
+    lines.push(`Command: ${pendingApproval.command}`);
+  }
+
+  if (pendingApproval.tool === "apply_patch") {
+    lines.push(`Patch operations: ${pendingApproval.operationCount}`);
   }
 
   return lines;
@@ -696,6 +765,55 @@ function mergeArtifacts(current: Artifact[], next: Artifact[]): Artifact[] {
 function lastAssistantText(state: InteractiveModel): string | null {
   const block = [...state.blocks].reverse().find((item) => item.kind === "assistant");
   return block ? block.lines.join("\n").trim() : null;
+}
+
+function hasApprovalBlock(state: InteractiveModel, lines: string[]): boolean {
+  return state.blocks.some(
+    (block) =>
+      block.kind === "approval" &&
+      block.lines.length === lines.length &&
+      block.lines.every((line, index) => line === lines[index])
+  );
+}
+
+function findLastAssistantIndex(state: InteractiveModel): number {
+  for (let index = state.blocks.length - 1; index >= 0; index -= 1) {
+    if (state.blocks[index]?.kind === "assistant") {
+      return index;
+    }
+  }
+
+  return -1;
+}
+
+function removeTrailingCompletionSystemLine(state: InteractiveModel): InteractiveModel {
+  const last = state.blocks.at(-1);
+  if (!last?.kind || last.kind !== "system") {
+    return state;
+  }
+
+  if (!isCompletionSystemLine(last.lines[0] ?? "")) {
+    return state;
+  }
+
+  return {
+    ...state,
+    blocks: state.blocks.slice(0, -1)
+  };
+}
+
+function isCompletionSystemLine(line: string): boolean {
+  return (
+    line === "Completed." ||
+    line === "Completed. Verification passed." ||
+    line === "Completed with verification issues." ||
+    line === "Run failed."
+  );
+}
+
+function summarizeForInteractiveTranscript(text: string): string {
+  const sections = text.trim().split(/\n\s*\n/);
+  return sections[0]?.trim() || text.trim();
 }
 
 function groupedActivityLineLimit(bucket: NonNullable<TranscriptBlock["bucket"]>): number {

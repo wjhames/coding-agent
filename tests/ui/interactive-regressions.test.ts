@@ -338,6 +338,60 @@ describe("interactive regressions", () => {
   );
 
   it(
+    "shows the pending approval transcript after resuming a paused session",
+    async () => {
+      const workspace = await makeWorkspace({
+        packageScripts: {
+          test: "node -e \"process.exit(0)\""
+        }
+      });
+      const llm = await createMockLlmServer([
+        toolCallResponse("run_shell", {
+          command: "printf 'created' > created.txt"
+        }),
+        finalResponse("Created the file.")
+      ]);
+      const homeDir = await makeHomeDir(llm.baseUrl);
+      await ensureBuiltCli();
+
+      const firstSession = spawnInteractiveCli({
+        cwd: workspace,
+        distCli,
+        homeDir,
+        repoRoot
+      });
+
+      try {
+        await waitForOutput(firstSession, "Type a task", 8_000);
+        await typeText(firstSession.stdin, "Create a file using the shell");
+        firstSession.stdin.write("\r");
+        await waitForOutput(firstSession, "Approval required to run shell command", 8_000);
+      } finally {
+        firstSession.stdin.write("\u0003");
+        await waitForExit(firstSession.child, 5_000).catch(() => undefined);
+      }
+
+      const resumedSession = spawnInteractiveCli({
+        cwd: workspace,
+        distCli,
+        homeDir,
+        repoRoot
+      });
+
+      try {
+        await waitForOutput(resumedSession, "Type a task", 8_000);
+        resumedSession.stdin.write("\r");
+        await waitForOutput(resumedSession, "Approval required to run shell command", 8_000);
+        await waitForOutput(resumedSession, "Command: printf 'created' > created.txt", 8_000);
+      } finally {
+        resumedSession.stdin.write("\u0003");
+        await waitForExit(resumedSession.child, 5_000).catch(() => undefined);
+      }
+    },
+    20_000
+  );
+
+  it(
     "acknowledges approval before running the approved command",
     async () => {
       const workspace = await makeWorkspace({
