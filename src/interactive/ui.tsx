@@ -236,7 +236,9 @@ export function InteractiveApp(props: {
 
     if (key.upArrow) {
       if (modelRef.current.pendingApproval && modelRef.current.input.length === 0) {
-        updateModel((current) => toggleApprovalChoice(current));
+        const next = toggleApprovalChoice(modelRef.current);
+        modelRef.current = next;
+        updateModel(() => next);
       } else {
         updateModel((current) => scrollInteractiveViewport(current, "up"));
       }
@@ -245,7 +247,9 @@ export function InteractiveApp(props: {
 
     if (key.downArrow) {
       if (modelRef.current.pendingApproval && modelRef.current.input.length === 0) {
-        updateModel((current) => toggleApprovalChoice(current));
+        const next = toggleApprovalChoice(modelRef.current);
+        modelRef.current = next;
+        updateModel(() => next);
       } else {
         updateModel((current) => scrollInteractiveViewport(current, "down"));
       }

@@ -77,7 +77,7 @@ export function assertShellWritesStayInWorkspace(args: {
 }): void {
   const context = resolveShellExecutionContext(args);
 
-  for (const target of findWriteRedirectTargets(context.tokens.slice(context.commandStartIndex))) {
+  for (const target of findWriteTargets(context.tokens.slice(context.commandStartIndex))) {
     try {
       resolveWorkspacePath(args.cwd, resolve(context.effectiveCwd, target));
     } catch {
@@ -155,6 +155,66 @@ function findWriteRedirectTargets(tokens: string[]): string[] {
   }
 
   return targets;
+}
+
+function findWriteTargets(tokens: string[]): string[] {
+  const redirectedTargets = findWriteRedirectTargets(tokens);
+  const explicitTargets = findExplicitWriteTargets(tokens);
+
+  return [...new Set([...redirectedTargets, ...explicitTargets])];
+}
+
+function findExplicitWriteTargets(tokens: string[]): string[] {
+  const command = firstCommandToken(tokens);
+
+  if (command === null) {
+    return [];
+  }
+
+  const args = command.arguments.filter(
+    (token) => token.length > 0 && !isShellControlOperator(token)
+  );
+
+  if (command.name === "touch" || command.name === "mkdir") {
+    return args.filter((token) => !token.startsWith("-"));
+  }
+
+  if ((command.name === "cp" || command.name === "mv") && args.length > 0) {
+    return [args[args.length - 1] ?? ""].filter(Boolean);
+  }
+
+  if (command.name === "tee") {
+    return args.filter((token) => !token.startsWith("-"));
+  }
+
+  return [];
+}
+
+function firstCommandToken(tokens: string[]): {
+  arguments: string[];
+  name: string;
+} | null {
+  let index = 0;
+
+  while (index < tokens.length) {
+    const token = tokens[index] ?? "";
+
+    if (isShellControlOperator(token)) {
+      break;
+    }
+
+    if (token.length === 0 || isLeadingEnvironmentAssignment(token)) {
+      index += 1;
+      continue;
+    }
+
+    return {
+      arguments: tokens.slice(index + 1),
+      name: token
+    };
+  }
+
+  return null;
 }
 
 function tokenizeShellCommand(command: string): string[] {
