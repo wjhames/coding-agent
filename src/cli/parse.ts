@@ -46,7 +46,14 @@ export function parseCliArgs(argv: string[]): CliInvocation {
   const command =
     first === "doctor" || first === "exec" || first === "resume" || first === "sessions"
       ? first
-      : "interactive";
+      : first === undefined || first.startsWith("-")
+        ? "interactive"
+        : null;
+
+  if (command === null) {
+    throw new CliUsageError(`Unknown command \`${first}\`. See \`coding-agent --help\`.`);
+  }
+
   const commandArgv = command === "interactive" ? argv : rest;
   const parsed = parseArgs({
     args: commandArgv,

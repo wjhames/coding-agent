@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+import { writeFile } from "node:fs/promises";
 import { realpathSync } from "node:fs";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import process from "node:process";
@@ -88,7 +89,7 @@ export async function runCli(
       const body = invocation.options.json
         ? `${JSON.stringify(doctor, null, 2)}\n`
         : `Config present: ${doctor.configPresent}\nLLM ready: ${doctor.llmReady}\nModel: ${doctor.model ?? "unset"}\nProfiles: ${doctor.profiles.join(", ") || "none"}\n`;
-      io.stdout.write(body);
+      await writeDirectOutput(io, body, invocation.options.output, "stdout");
       return 0;
     }
 
@@ -99,7 +100,7 @@ export async function runCli(
       const body = invocation.options.json
         ? `${JSON.stringify(sessions, null, 2)}\n`
         : `${sessions.map((session) => `${session.id} ${session.status} ${session.updatedAt}`).join("\n")}\n`;
-      io.stdout.write(body);
+      await writeDirectOutput(io, body, invocation.options.output, "stdout");
       return 0;
     }
 
@@ -188,6 +189,20 @@ export async function runCli(
     await writeCommandError(io, normalizedError, wantsJson);
     return 1;
   }
+}
+
+async function writeDirectOutput(
+  io: CliIO,
+  body: string,
+  outputPath: string | undefined,
+  stream: "stderr" | "stdout"
+): Promise<void> {
+  if (outputPath) {
+    await writeFile(outputPath, body, "utf8");
+    return;
+  }
+
+  io[stream].write(body);
 }
 
 if (isEntrypoint()) {

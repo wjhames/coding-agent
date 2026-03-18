@@ -99,13 +99,14 @@ export async function listRecentSessions(
 
   try {
     const names = await readdir(sessionRoot);
-    const sessions = await Promise.all(
+    const settled = await Promise.allSettled(
       names
         .filter((name) => name.endsWith(".json"))
         .map(async (name) => loadSession(basename(name, ".json"), homeDir))
     );
 
-    return sessions
+    return settled
+      .flatMap((result) => (result.status === "fulfilled" ? [result.value] : []))
       .filter((session): session is SessionRecord => session !== null)
       .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
       .slice(0, limit);
