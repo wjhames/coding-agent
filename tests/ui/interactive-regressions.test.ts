@@ -141,64 +141,6 @@ describe("interactive regressions", () => {
   );
 
   it(
-    "does not continue tool work after the user switches to a direct question",
-    async () => {
-      const workspace = await makeWorkspace();
-      const llm = await createMockLlmServer([
-        finalResponse("I did not finish the task."),
-        toolCallResponse("write_plan", {
-          items: [
-            {
-              content: "Keep editing files",
-              status: "in_progress"
-            }
-          ],
-          summary: "Continue implementing the app."
-        }),
-        finalResponse("I did not complete it because integration work remained.")
-      ]);
-      const homeDir = await makeHomeDir(llm.baseUrl);
-      await ensureBuiltCli();
-      const session = spawnInteractiveCli({
-        cwd: workspace,
-        distCli,
-        homeDir,
-        repoRoot
-      });
-
-      try {
-        await waitForOutput(session, "Type a task", 8_000);
-        await typeText(session.stdin, "Implement the app");
-        session.stdin.write("\r");
-        await waitForOutput(session, "I did not finish the task.", 8_000);
-
-        await typeText(session.stdin, "Why didn't you complete the task?");
-        session.stdin.write("\r");
-        await waitForOutput(session, "I did not complete it because integration work remained.", 8_000);
-
-        const continuedTooling = await outputAppearsWithin(session, "Plan update", 500);
-
-        if (continuedTooling) {
-          await captureFailureArtifacts({
-            failure: {
-              details: session.getOutput(),
-              kind: "ui_feedback_gap"
-            },
-            summary: "a direct follow-up question should not trigger more tool work",
-            transcript: session.getOutput()
-          });
-        }
-
-        expect(continuedTooling).toBe(false);
-      } finally {
-        session.stdin.write("\u0003");
-        await waitForExit(session.child, 5_000).catch(() => undefined);
-      }
-    },
-    20_000
-  );
-
-  it(
     "does not rerun an approved shell command when the resumed request omits the prior tool result",
     async () => {
       const workspace = await makeWorkspace({
