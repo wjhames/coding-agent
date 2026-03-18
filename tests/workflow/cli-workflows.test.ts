@@ -144,4 +144,183 @@ describe("black-box cli workflows", () => {
     20_000
   );
 
+  it(
+    "runs verification exactly once after a paused patch is resumed",
+    async () => {
+      const workspace = await makeWorkspace({
+        packageScripts: {
+          test: "node -e \"const { readFileSync } = require('node:fs'); process.exit(readFileSync('status.txt', 'utf8').trim() === 'ready' ? 0 : 1)\""
+        }
+      });
+      const llm = await createMockLlmServer([
+        toolCallResponse("apply_patch", {
+          operations: [
+            {
+              content: "ready\n",
+              path: "status.txt",
+              type: "create"
+            }
+          ]
+        }),
+        finalResponse("Created status.txt and verified it.")
+      ]);
+      const homeDir = await makeHomeDir(llm.baseUrl);
+
+      const paused = await runBuiltCli(
+        [
+          "exec",
+          "Create status.txt and verify it",
+          "--json",
+          "--cwd",
+          workspace,
+          "--approval-policy",
+          "prompt"
+        ],
+        homeDir
+      );
+
+      expect(paused.exitCode).toBe(2);
+      const pausedPayload = JSON.parse(paused.stdout);
+      expect(pausedPayload.status).toBe("paused");
+
+      const resumed = await runBuiltCli(
+        [
+          "resume",
+          pausedPayload.sessionId,
+          "--json",
+          "--approval-policy",
+          "auto"
+        ],
+        homeDir
+      );
+
+      const resumedPayload = JSON.parse(resumed.stdout) as {
+        status: string;
+        verification: {
+          ran: boolean;
+          runs: Array<{ command: string; passed: boolean }>;
+          status: string;
+        };
+      };
+
+      expect(resumed.exitCode).toBe(0);
+      expect(resumedPayload.status).toBe("completed");
+      expect(resumedPayload.verification.ran).toBe(true);
+      expect(resumedPayload.verification.status).toBe("passed");
+      expect(resumedPayload.verification.runs).toHaveLength(1);
+      expect(resumedPayload.verification.runs[0]).toMatchObject({
+        command: "npm test",
+        passed: true
+      });
+    },
+    20_000
+  );
+
+  it(
+    "returns exit code 1 when the task remains incomplete because the plan still has pending work",
+    async () => {
+      const workspace = await makeWorkspace({
+        packageScripts: {
+          test: "node -e \"process.exit(0)\""
+        }
+      });
+      const llm = await createMockLlmServer([
+        toolCallResponse("write_plan", {
+          items: [
+            {
+              content: "Create backend package",
+              status: "completed"
+            },
+            {
+              content: "Create frontend package",
+              status: "pending"
+            }
+          ],
+          summary: "Build the requested frontend and backend."
+        }),
+        finalResponse("Implemented the requested frontend and backend.")
+      ]);
+      const homeDir = await makeHomeDir(llm.baseUrl, "auto");
+
+      const run = await runBuiltCli(
+        ["exec", "Create a frontend and backend app", "--json", "--cwd", workspace],
+        homeDir
+      );
+      const payload = JSON.parse(run.stdout) as { status: string };
+
+      expect(run.exitCode).toBe(1);
+      expect(payload.status).toBe("failed");
+    },
+    20_000
+  );
+
+  it(
+    "stops after one repair loop when verification keeps failing under a one-step tool budget",
+    async () => {
+      const workspace = await makeWorkspace({
+        packageScripts: {
+          test: "node -e \"process.exit(1)\""
+        }
+      });
+      const llm = await createRequestAwareMockLlmServer({
+        onRequest(_request, requestIndex) {
+          if (requestIndex === 0) {
+            return toolCallResponse("apply_patch", {
+              operations: [
+                {
+                  content: "broken\n",
+                  path: "status.txt",
+                  type: "create"
+                }
+              ]
+            });
+          }
+
+          if (requestIndex === 1) {
+            return finalResponse("Created the initial implementation.");
+          }
+
+          if (requestIndex === 2) {
+            return toolCallResponse("apply_patch", {
+              operations: [
+                {
+                  newText: "still-broken\n",
+                  oldText: "broken\n",
+                  path: "status.txt",
+                  type: "replace"
+                }
+              ]
+            });
+          }
+
+          if (requestIndex === 3) {
+            return finalResponse("Attempted one repair.");
+          }
+
+          return finalResponse("Verification is still failing.");
+        }
+      });
+      const homeDir = await makeHomeDir(llm.baseUrl, "auto");
+
+      const run = await runBuiltCli(
+        [
+          "exec",
+          "Create status.txt and keep repairing until npm test passes",
+          "--json",
+          "--cwd",
+          workspace,
+          "--max-steps",
+          "1"
+        ],
+        homeDir
+      );
+      const payload = JSON.parse(run.stdout) as { status: string };
+
+      expect(run.exitCode).toBe(1);
+      expect(payload.status).toBe("failed");
+      expect(llm.requests.length).toBeLessThanOrEqual(4);
+    },
+    20_000
+  );
+
 });

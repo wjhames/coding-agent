@@ -12,6 +12,7 @@ import {
 } from "../helpers/cli-harness.js";
 import {
   createMockLlmServer,
+  createRequestAwareMockLlmServer,
   finalResponse,
   toolCallResponse,
   cleanupMockLlmServers
@@ -511,6 +512,41 @@ describe("adversarial runtime failures", () => {
     expect(payload.status).toBe("completed");
   });
 
+  it("does not advertise inferred verification commands to the model for pure inspection tasks", async () => {
+    const workspace = await makeWorkspace({
+      packageScripts: {
+        build: "node -e \"process.exit(0)\"",
+        test: "node -e \"process.exit(0)\""
+      }
+    });
+    const llm = await createRequestAwareMockLlmServer({
+      onRequest() {
+        return finalResponse("Inspected the workspace.");
+      }
+    });
+    const homeDir = await makeHomeDir(llm.baseUrl, "auto");
+
+    await runBuiltCli(["exec", "Inspect this workspace", "--json", "--cwd", workspace], homeDir);
+    const firstRequest =
+      llm.requests[0]?.body && typeof llm.requests[0].body === "object"
+        ? (llm.requests[0].body as { messages?: Array<{ content?: string; role?: string }> })
+        : null;
+    const systemMessage =
+      firstRequest?.messages?.find((message) => message.role === "system")?.content ?? "";
+
+    if (systemMessage.includes("Likely verification commands:")) {
+      await captureFailureArtifacts({
+        failure: {
+          details: systemMessage,
+          kind: "verification_stale"
+        },
+        summary: "inspection prompts should not preload verification commands into the model context"
+      });
+    }
+
+    expect(systemMessage).not.toContain("Likely verification commands:");
+  });
+
   it("includes explicitly requested build commands in verification planning", async () => {
     const workspace = await makeWorkspace({
       packageScripts: {
@@ -650,6 +686,71 @@ describe("adversarial runtime failures", () => {
       });
     }
 
+    expect(planResult?.summary).toBe("write_plan completed.");
+  });
+
+  it("keeps adjacent read_file and write_plan tool summaries distinct in session history", async () => {
+    const workspace = await makeWorkspace({
+      files: {
+        "frontend/package.json": JSON.stringify({ name: "frontend", private: true }, null, 2)
+      }
+    });
+    const llm = await createMockLlmServer([
+      toolCallResponse("read_file", {
+        path: "frontend/package.json"
+      }),
+      toolCallResponse("write_plan", {
+        items: [
+          {
+            content: "Create backend server",
+            status: "in_progress"
+          }
+        ],
+        summary: "Set up backend integration."
+      }),
+      finalResponse("Planned the next backend step.")
+    ]);
+    const homeDir = await makeHomeDir(llm.baseUrl, "auto");
+
+    const run = await runBuiltCli(["exec", "Read the frontend package and make a plan", "--json", "--cwd", workspace], homeDir);
+    const payload = JSON.parse(run.stdout) as { sessionId: string; summary: string };
+    const session = JSON.parse(
+      await readFile(join(homeDir, ".coding-agent", "sessions", `${payload.sessionId}.json`), "utf8")
+    ) as {
+      turns: Array<{
+        kind: string;
+        summary?: string;
+        tool?: string;
+      }>;
+    };
+    const readResult = session.turns.find(
+      (turn) => turn.kind === "tool_result" && turn.tool === "read_file"
+    );
+    const planResult = session.turns.find(
+      (turn) => turn.kind === "tool_result" && turn.tool === "write_plan"
+    );
+
+    if (
+      readResult?.summary !== "Read frontend/package.json lines 1-4." ||
+      planResult?.summary !== "write_plan completed."
+    ) {
+      await captureFailureArtifacts({
+        failure: {
+          details: JSON.stringify(
+            {
+              planResult,
+              readResult
+            },
+            null,
+            2
+          ),
+          kind: "tool_result_accounting"
+        },
+        summary: payload.summary
+      });
+    }
+
+    expect(readResult?.summary).toBe("Read frontend/package.json lines 1-4.");
     expect(planResult?.summary).toBe("write_plan completed.");
   });
 

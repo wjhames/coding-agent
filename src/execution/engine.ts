@@ -1,3 +1,4 @@
+import { access } from "node:fs/promises";
 import { resolve } from "node:path";
 import { ApprovalDeniedError, ApprovalRequiredError, type PendingAction } from "../app/approval.js";
 import { collectRepoContext } from "../app/context.js";
@@ -24,6 +25,7 @@ import {
 } from "./completion.js";
 import {
   addObservation,
+  addVerificationRun,
   addArtifacts,
   addChangedFiles,
   buildFinalSummary,
@@ -257,6 +259,7 @@ async function executeTask(args: {
     executionConfig: resolvedConfig
   });
   let repoContext = await collectRepoContext(args.cwd);
+  let repoContextSummary = toRepoContextSummary(repoContext);
   const readOnlyTask = isLikelyReadOnlyTask(args.prompt);
   const guidance = await loadGuidance({
     cwd: args.cwd,
@@ -264,11 +267,6 @@ async function executeTask(args: {
     prompt: args.prompt,
     repoGuidanceFiles: repoContext.guidanceFiles
   });
-  let verificationPlan = planVerificationCommands({
-    packageScripts: repoContext.packageScripts
-  });
-  let verificationCommands = verificationPlan.commands;
-  let repoContextSummary = toRepoContextSummary(repoContext);
   const state =
     args.state ??
     createExecutionState({
@@ -281,12 +279,19 @@ async function executeTask(args: {
       turns: [],
       verification: {
         ...emptyVerificationSummary(),
-        commands: verificationCommands,
+        commands: [],
         notRunReason: "Verification has not run yet.",
-        selectedCommands: verificationCommands,
-        skippedCommands: verificationPlan.skippedCommands
+        selectedCommands: [],
+        skippedCommands: []
       }
     });
+  let verificationPlan = planVerificationCommands({
+    assistantSummary: "",
+    changedFiles: changedFilesList(state),
+    packageScripts: repoContext.packageScripts,
+    prompt: args.prompt
+  });
+  let verificationCommands = verificationPlan.selectedCommands;
   state.guidance = guidance.summary;
   state.verification = {
     ...state.verification,
@@ -331,18 +336,21 @@ async function executeTask(args: {
     if (state.changedFiles.size > 0) {
       repoContext = await collectRepoContext(args.cwd);
       repoContextSummary = toRepoContextSummary(repoContext);
-      verificationPlan = planVerificationCommands({
-        packageScripts: repoContext.packageScripts
-      });
-      verificationCommands = verificationPlan.commands;
-      state.verification = {
-        ...state.verification,
-        commands: verificationCommands,
-        inferred: true,
-        selectedCommands: verificationCommands,
-        skippedCommands: verificationPlan.skippedCommands
-      };
     }
+    verificationPlan = planVerificationCommands({
+      assistantSummary: summary,
+      changedFiles: changedFilesList(state),
+      packageScripts: repoContext.packageScripts,
+      prompt: args.prompt
+    });
+    verificationCommands = verificationPlan.selectedCommands;
+    state.verification = {
+      ...state.verification,
+      commands: verificationCommands,
+      inferred: true,
+      selectedCommands: verificationCommands,
+      skippedCommands: verificationPlan.skippedCommands
+    };
 
     const verificationResult = await runVerificationCycle({
       client,
@@ -362,9 +370,19 @@ async function executeTask(args: {
 
     const sanitizedSummary = sanitizeAssistantText(summary);
     const completionFailureReason =
-      findCompletionFailureReason(sanitizedSummary) ?? findLatestToolFailureReason(state.turns);
+      findCompletionFailureReason(sanitizedSummary) ??
+      findLatestToolFailureReason(state.turns) ??
+      findPlanFailureReason(state) ??
+      (await findMissingDeliverableReason({
+        cwd: args.cwd,
+        prompt: args.prompt
+      }));
     const status =
-      state.verification.status === "failed" || completionFailureReason !== null ? "failed" : "completed";
+      state.verification.status === "failed" ||
+      (verificationCommands.length > 0 && state.verification.status !== "passed") ||
+      completionFailureReason !== null
+        ? "failed"
+        : "completed";
     const finalSummary = buildFinalSummary(
       completionFailureReason
         ? `${sanitizedSummary}\n\nIncomplete task: ${completionFailureReason}`
@@ -567,12 +585,18 @@ async function executePendingAction(args: {
         addObservation: (observation) => {
           addObservation(args.state, observation);
         },
+        addVerificationRun: (run) => {
+          addVerificationRun(args.state, run);
+        },
         command: pendingAction.action.command,
         cwd: args.cwd
-      });
+      }, args.state.verification.selectedCommands);
     }
 
-    const latestObservation = args.state.observations.at(-1);
+    const latestObservation =
+      args.state.observations.length > beforeObservationCount
+        ? args.state.observations.at(-1)
+        : undefined;
     const newArtifacts = args.state.artifacts.slice(beforeArtifactCount);
     const newChangedFiles = changedFilesList(args.state).filter((path) => !beforeChangedFiles.has(path));
     recordToolResultTurn({
@@ -650,4 +674,31 @@ async function persistSession(args: {
   }
 
   return createSession(args.input, args.sessionHomeDir);
+}
+
+function findPlanFailureReason(state: ExecutionState): string | null {
+  if (state.plan?.items.some((item) => item.status !== "completed")) {
+    return "Plan still has unfinished work.";
+  }
+
+  return null;
+}
+
+async function findMissingDeliverableReason(args: {
+  cwd: string;
+  prompt: string;
+}): Promise<string | null> {
+  const referencedPaths = [...args.prompt.matchAll(/\b([A-Za-z0-9._-]+(?:\/[A-Za-z0-9._-]+)+)\b/g)]
+    .map((match) => match[1] ?? "")
+    .filter((path) => path.includes("/") && path.includes(".") && !path.startsWith("/"));
+
+  for (const relativePath of referencedPaths) {
+    try {
+      await access(resolve(args.cwd, relativePath));
+    } catch {
+      return `Required deliverable is missing: ${relativePath}.`;
+    }
+  }
+
+  return null;
 }

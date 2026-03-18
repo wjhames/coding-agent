@@ -16,6 +16,7 @@ import {
   addArtifacts,
   addChangedFiles,
   addObservation,
+  addVerificationRun,
   changedFilesList,
   recordAssistantTurn,
   setContextSnapshot,
@@ -166,6 +167,9 @@ function createRuntimeTools(args: {
       addObservation: (observation) => {
         addObservation(args.state, observation);
       },
+      addVerificationRun: (run) => {
+        addVerificationRun(args.state, run);
+      },
       config: args.config,
       cwd: args.cwd,
       verificationCommands: args.verificationCommands
@@ -203,7 +207,10 @@ function wrapToolWithEvents(args: {
 
       try {
         const result = await args.tool.run(input);
-        const latestObservation = args.state.observations.at(-1);
+        const latestObservation =
+          args.state.observations.length > beforeObservationCount
+            ? args.state.observations.at(-1)
+            : undefined;
         const newArtifacts = args.state.artifacts.slice(beforeArtifactCount);
         const newChangedFiles = changedFilesList(args.state).filter(
           (path) => !beforeChangedFiles.has(path)

@@ -11,13 +11,15 @@ import {
 import {
   assertShellWritesStayInWorkspace,
   executeShellCommand,
-  shellResultToObservation
+  shellResultToObservation,
+  shellResultToVerificationRun
 } from "../app/shell.js";
 import { diffWorkspaceSnapshots, snapshotWorkspace } from "../app/workspace-state.js";
 import { createDiffArtifact } from "../app/diff.js";
 import type { ResolvedExecutionConfig } from "../config/load.js";
-import type { Approval, Artifact, Observation } from "../runtime/contracts.js";
+import type { Approval, Artifact, Observation, VerificationRun } from "../runtime/contracts.js";
 import type { LlmTool } from "../llm/openai-client.js";
+import { commandMatchesVerificationCommand } from "../app/verification.js";
 
 const runShellInputSchema = z.object({
   command: z.string().min(1),
@@ -31,6 +33,7 @@ export function createRunShellTool(args: {
   addArtifacts: (artifacts: Artifact[]) => void;
   addChangedFiles: (files: string[]) => void;
   addObservation: (observation: Observation) => void;
+  addVerificationRun: (run: VerificationRun) => void;
   config: ResolvedExecutionConfig;
   cwd: string;
   verificationCommands: string[];
@@ -94,9 +97,10 @@ export function createRunShellTool(args: {
         addArtifacts: args.addArtifacts,
         addChangedFiles: args.addChangedFiles,
         addObservation: args.addObservation,
+        addVerificationRun: args.addVerificationRun,
         command: parsed.command,
         cwd: args.cwd
-      });
+      }, args.verificationCommands);
     }
   };
 }
@@ -105,9 +109,10 @@ export async function runShellAction(args: {
   addArtifacts: (artifacts: Artifact[]) => void;
   addChangedFiles: (files: string[]) => void;
   addObservation: (observation: Observation) => void;
+  addVerificationRun: (run: VerificationRun) => void;
   command: string;
   cwd: string;
-}): Promise<string> {
+}, verificationCommands: string[] = []): Promise<string> {
   const before = await snapshotWorkspace({ cwd: args.cwd });
   const result = await executeShellCommand({
     command: args.command,
@@ -133,6 +138,21 @@ export async function runShellAction(args: {
   }
 
   args.addObservation(shellResultToObservation({ command: args.command, result }));
+  const verificationRun = shellResultToVerificationRun({
+    command: args.command,
+    result
+  });
+
+  if (
+    verificationCommands.some((command) =>
+      commandMatchesVerificationCommand({
+        actual: args.command,
+        expected: command
+      })
+    )
+  ) {
+    args.addVerificationRun(verificationRun);
+  }
 
   return JSON.stringify({
     changedFiles,

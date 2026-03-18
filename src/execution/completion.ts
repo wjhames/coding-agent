@@ -30,6 +30,12 @@ export function findCompletionFailureReason(value: string): string | null {
   if (/\bincomplete\b/.test(normalized)) {
     return "Assistant reported unfinished work.";
   }
+  if (/\bapproval\b.*\brequired\b/.test(normalized) || /\bneed your approval\b/.test(normalized)) {
+    return "Assistant reported that approval is still required.";
+  }
+  if (/\bwork remains\b/.test(normalized)) {
+    return "Assistant reported unfinished work.";
+  }
 
   return null;
 }

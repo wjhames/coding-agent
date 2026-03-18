@@ -13,7 +13,8 @@ import { collectContextSnippets, deriveWorkingSet } from "./context.js";
 
 export interface ModelMessage {
   content: string;
-  role: "assistant" | "system" | "user";
+  role: "assistant" | "system" | "tool" | "user";
+  tool_call_id?: string | undefined;
 }
 
 export async function buildRequestContext(args: {
@@ -245,14 +246,31 @@ function collectRecentConversationTurns(turns: TurnRecord[]): {
   messages: ModelMessage[];
   rawCount: number;
 } {
-  const rawTurns = turns.filter((turn) => turn.kind === "assistant" || turn.kind === "user");
-  const recent = rawTurns.slice(-6);
+  const rawTurns = turns.slice(-12);
+  const recent = rawTurns.slice(-8);
 
   return {
-    messages: recent.map((turn) => ({
-      content: "text" in turn ? turn.text : "",
-      role: turn.kind === "assistant" ? "assistant" : "user"
-    })),
+    messages: recent.flatMap<ModelMessage>((turn) => {
+      if (turn.kind === "assistant" || turn.kind === "user") {
+        return [
+          {
+            content: turn.text,
+            role: turn.kind === "assistant" ? "assistant" : "user"
+          } satisfies ModelMessage
+        ];
+      }
+
+      if (turn.kind === "tool_result") {
+        return [
+          {
+            content: turn.error ? `Tool error: ${turn.error}` : turn.summary,
+            role: "tool"
+          } satisfies ModelMessage
+        ];
+      }
+
+      return [];
+    }),
     rawCount: recent.length
   };
 }

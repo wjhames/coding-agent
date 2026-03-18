@@ -114,6 +114,7 @@ describe("action tools", () => {
       addArtifacts: () => undefined,
       addChangedFiles: () => undefined,
       addObservation: () => undefined,
+      addVerificationRun: () => undefined,
       config: {
         approvalPolicy: "prompt",
         baseUrl: "http://localhost:1234/v1",
@@ -150,6 +151,7 @@ describe("action tools", () => {
       addArtifacts: () => undefined,
       addChangedFiles: () => undefined,
       addObservation: () => undefined,
+      addVerificationRun: () => undefined,
       config: {
         approvalPolicy: "prompt",
         baseUrl: "http://localhost:1234/v1",
@@ -176,6 +178,45 @@ describe("action tools", () => {
     ).resolves.toContain("\"exitCode\":0");
   });
 
+  it("keeps approval required for side-effecting commands that merely start with a verification command", async () => {
+    const cwd = await makeWorkspace();
+    await writeFile(
+      join(cwd, "package.json"),
+      JSON.stringify({
+        scripts: {
+          test: "node -e \"process.exit(0)\""
+        }
+      }),
+      "utf8"
+    );
+    const tool = createRunShellTool({
+      addApproval: () => undefined,
+      addArtifacts: () => undefined,
+      addChangedFiles: () => undefined,
+      addObservation: () => undefined,
+      addVerificationRun: () => undefined,
+      config: {
+        approvalPolicy: "prompt",
+        baseUrl: "http://localhost:1234/v1",
+        maxSteps: 8,
+        model: "gpt-4.1-mini",
+        networkEgress: false,
+        profileName: "local",
+        timeout: undefined
+      },
+      cwd,
+      verificationCommands: ["npm test"]
+    });
+
+    await expect(
+      tool.run({
+        command: "npm test && printf 'created' > created.txt"
+      })
+    ).rejects.toBeInstanceOf(ApprovalRequiredError);
+
+    await expect(readFile(join(cwd, "created.txt"), "utf8")).rejects.toThrow();
+  });
+
   it("rejects shell commands that write outside the workspace", async () => {
     const cwd = await makeWorkspace();
     const outsideDir = await mkdtemp(join(os.tmpdir(), "coding-agent-action-outside-"));
@@ -186,6 +227,7 @@ describe("action tools", () => {
       addArtifacts: () => undefined,
       addChangedFiles: () => undefined,
       addObservation: () => undefined,
+      addVerificationRun: () => undefined,
       config: {
         approvalPolicy: "auto",
         baseUrl: "http://localhost:1234/v1",
@@ -213,6 +255,7 @@ describe("action tools", () => {
       addArtifacts: () => undefined,
       addChangedFiles: () => undefined,
       addObservation: () => undefined,
+      addVerificationRun: () => undefined,
       config: {
         approvalPolicy: "auto",
         baseUrl: "http://localhost:1234/v1",

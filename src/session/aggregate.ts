@@ -81,11 +81,19 @@ export function createSessionRecord(args: {
   now?: string;
 }): SessionRecord {
   const now = args.now ?? new Date().toISOString();
+  const firstTurnAt = (args.input.turns ?? []).reduce<string | null>((earliest, turn) => {
+    if (earliest === null) {
+      return turn.at;
+    }
+
+    return earliest.localeCompare(turn.at) <= 0 ? earliest : turn.at;
+  }, null);
+  const createdAt = firstTurnAt && firstTurnAt.localeCompare(now) < 0 ? firstTurnAt : now;
 
   return {
     config: args.input.config,
     context: args.input.context ?? emptyContextSnapshot(),
-    createdAt: now,
+    createdAt,
     cwd: args.input.cwd,
     guidance: args.input.guidance ?? emptyGuidanceSummary(),
     id: args.id,

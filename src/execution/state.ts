@@ -9,6 +9,7 @@ import type {
   RepoContextSummary,
   ToolName,
   TurnRecord,
+  VerificationRun,
   VerificationSummary
 } from "../runtime/contracts.js";
 import type { PendingAction } from "../app/approval.js";
@@ -92,6 +93,14 @@ export function addApproval(state: ExecutionState, approval: Approval): void {
 
 export function addObservation(state: ExecutionState, observation: Observation): void {
   state.observations.push(observation);
+}
+
+export function addVerificationRun(state: ExecutionState, run: VerificationRun): void {
+  state.verification = {
+    ...state.verification,
+    ran: true,
+    runs: [...state.verification.runs, run]
+  };
 }
 
 export function setContextSnapshot(state: ExecutionState, context: ContextSnapshot): void {
