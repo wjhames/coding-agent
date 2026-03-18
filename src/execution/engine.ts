@@ -74,7 +74,7 @@ export async function runResume(args: {
 }): Promise<CommandResult | null> {
   const session = args.sessionId
     ? await loadSession(args.sessionId, args.sessionHomeDir)
-    : (await listRecentSessions(1, args.sessionHomeDir))[0] ?? null;
+    : await loadLatestResumableSession(args.sessionHomeDir);
 
   if (!session) {
     return null;
@@ -466,7 +466,53 @@ async function executeTask(args: {
     }
 
     if (error instanceof ApprovalDeniedError) {
-      throw error;
+      const approval = error.approval;
+
+      if (approval) {
+        state.approvals = [
+          ...state.approvals.filter((item) => item.id !== approval.id),
+          approval
+        ];
+      }
+
+      if (error.action) {
+        state.pendingAction = error.action;
+      }
+
+      recordSystemNote(state, error.message);
+      const failedSession = await persistSession({
+        existingSession: args.existingSession,
+        input: {
+          config: resolvedConfig,
+          context: state.context,
+          cwd: args.cwd,
+          guidance: state.guidance,
+          mode: "exec",
+          prompt: args.sessionPrompt,
+          repoContext: repoContextSummary,
+          state: {
+            ...toExecutionSnapshot(state),
+            pendingAction: null
+          },
+          status: "failed",
+          summary: error.message,
+          turns: state.turns
+        },
+        sessionHomeDir: args.sessionHomeDir
+      });
+      const result = resultFromSession(failedSession);
+      emitRuntimeEvent(args.observer, {
+        at: new Date().toISOString(),
+        detail: error.message,
+        status: "failed",
+        type: "status"
+      });
+      emitRuntimeEvent(args.observer, {
+        at: new Date().toISOString(),
+        result,
+        type: "run_finished"
+      });
+      return result;
     }
 
     if (error instanceof Error) {
@@ -505,6 +551,11 @@ async function executeTask(args: {
 
     throw error;
   }
+}
+
+async function loadLatestResumableSession(homeDir: string | undefined): Promise<SessionRecord | null> {
+  const sessions = await listRecentSessions(50, homeDir);
+  return sessions.find((session) => session.status === "paused") ?? sessions[0] ?? null;
 }
 
 async function executePendingAction(args: {

@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { ApprovalRequiredError } from "../app/approval.js";
+import { ApprovalDeniedError, ApprovalRequiredError } from "../app/approval.js";
 import { LlmError, toolCallSchema, type OpenAICompatibleMessage } from "./openai-transport.js";
 import { normalizeMessageContent } from "./openai-stream.js";
 
@@ -62,7 +62,7 @@ export async function executeToolCall(args: {
       toolCallId: args.toolCall.id
     });
   } catch (error) {
-    if (error instanceof ApprovalRequiredError) {
+    if (error instanceof ApprovalRequiredError || error instanceof ApprovalDeniedError) {
       throw error;
     }
 

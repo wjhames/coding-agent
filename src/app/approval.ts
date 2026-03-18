@@ -14,7 +14,11 @@ export class ApprovalRequiredError extends Error {
 }
 
 export class ApprovalDeniedError extends Error {
-  constructor(message: string) {
+  constructor(
+    message: string,
+    public readonly approval?: Approval,
+    public readonly action?: PendingAction
+  ) {
     super(message);
   }
 }
@@ -49,7 +53,14 @@ export function enforceApproval(args: {
   } as PendingAction;
 
   if (args.config.approvalPolicy === "never") {
-    throw new ApprovalDeniedError(args.summary);
+    throw new ApprovalDeniedError(
+      `Approval denied for pending action: ${args.summary}`,
+      {
+        ...approval,
+        status: "rejected"
+      },
+      pendingAction
+    );
   }
 
   if (args.config.approvalPolicy === "prompt") {
