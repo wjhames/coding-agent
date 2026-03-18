@@ -206,6 +206,35 @@ describe("action tools", () => {
     ).rejects.toThrow("outside the workspace");
   });
 
+  it("allows shell commands that write inside a workspace subdirectory", async () => {
+    const cwd = await makeWorkspace();
+    const tool = createRunShellTool({
+      addApproval: () => undefined,
+      addArtifacts: () => undefined,
+      addChangedFiles: () => undefined,
+      addObservation: () => undefined,
+      config: {
+        approvalPolicy: "auto",
+        baseUrl: "http://localhost:1234/v1",
+        maxSteps: 8,
+        model: "gpt-4.1-mini",
+        networkEgress: false,
+        profileName: "local",
+        timeout: undefined
+      },
+      cwd,
+      verificationCommands: []
+    });
+
+    await expect(
+      tool.run({
+        command: "cd src && printf 'nested' > nested.txt"
+      })
+    ).resolves.toContain("\"changedFiles\":[\"src/nested.txt\"]");
+
+    await expect(readFile(join(cwd, "src", "nested.txt"), "utf8")).resolves.toBe("nested");
+  });
+
   it("fails patch deletes when the target file is missing", async () => {
     const cwd = await makeWorkspace();
     const tool = createApplyPatchTool({

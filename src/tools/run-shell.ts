@@ -8,7 +8,11 @@ import {
   isShellCommandReadOnly,
   normalizeShellCommand
 } from "../app/approval.js";
-import { executeShellCommand, shellResultToObservation } from "../app/shell.js";
+import {
+  assertShellWritesStayInWorkspace,
+  executeShellCommand,
+  shellResultToObservation
+} from "../app/shell.js";
 import { diffWorkspaceSnapshots, snapshotWorkspace } from "../app/workspace-state.js";
 import { createDiffArtifact } from "../app/diff.js";
 import type { ResolvedExecutionConfig } from "../config/load.js";
@@ -60,6 +64,11 @@ export function createRunShellTool(args: {
       if (args.config.networkEgress === false && isShellCommandNetworked(parsed.command)) {
         throw new ApprovalDeniedError("Networked shell commands are not allowed by config.");
       }
+
+      assertShellWritesStayInWorkspace({
+        command: parsed.command,
+        cwd: args.cwd
+      });
 
       const requiresApproval = shouldRequireApproval({
         command: parsed.command,

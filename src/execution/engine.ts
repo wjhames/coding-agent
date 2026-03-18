@@ -17,7 +17,11 @@ import { resultFromSession } from "../session/mappers.js";
 import { createSession, listRecentSessions, loadSession, updateSession } from "../session/store.js";
 import { applyPatchOperations } from "../tools/apply-patch.js";
 import { runShellAction } from "../tools/run-shell.js";
-import { findCompletionFailureReason, sanitizeAssistantText } from "./completion.js";
+import {
+  findCompletionFailureReason,
+  findLatestToolFailureReason,
+  sanitizeAssistantText
+} from "./completion.js";
 import {
   addObservation,
   addArtifacts,
@@ -357,7 +361,8 @@ async function executeTask(args: {
     }
 
     const sanitizedSummary = sanitizeAssistantText(summary);
-    const completionFailureReason = findCompletionFailureReason(sanitizedSummary);
+    const completionFailureReason =
+      findCompletionFailureReason(sanitizedSummary) ?? findLatestToolFailureReason(state.turns);
     const status =
       state.verification.status === "failed" || completionFailureReason !== null ? "failed" : "completed";
     const finalSummary = buildFinalSummary(
