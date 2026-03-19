@@ -211,9 +211,10 @@ function wrapToolWithEvents(args: {
   return {
     ...args.tool,
     async run(input, context) {
+      const inputArguments = serializeToolInput(input);
       const inputSummary = summarizeToolInput(input);
       const toolName = normalizeToolName(args.tool.name);
-      recordToolCallTurn(args.state, inputSummary, toolName, context?.toolCallId);
+      recordToolCallTurn(args.state, inputArguments, inputSummary, toolName, context?.toolCallId);
       emitRuntimeEvent(args.observer, {
         at: new Date().toISOString(),
         inputSummary,
@@ -332,13 +333,18 @@ function emitToolStatus(
 }
 
 function summarizeToolInput(input: unknown): string {
-  const serialized = JSON.stringify(input);
+  const serialized = serializeToolInput(input);
 
   if (!serialized) {
     return "";
   }
 
   return serialized.length > 240 ? `${serialized.slice(0, 237)}...` : serialized;
+}
+
+function serializeToolInput(input: unknown): string {
+  const serialized = JSON.stringify(input);
+  return serialized ?? "";
 }
 
 function normalizeToolName(name: string):

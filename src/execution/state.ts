@@ -199,6 +199,7 @@ export function recordSystemNote(state: ExecutionState, text: string, at?: strin
 
 export function recordToolCallTurn(
   state: ExecutionState,
+  inputArguments: string,
   inputSummary: string,
   tool: ToolName,
   toolCallId?: string,
@@ -207,6 +208,7 @@ export function recordToolCallTurn(
   state.turns.push({
     at: at ?? new Date().toISOString(),
     id: createTurnId("tool"),
+    inputArguments,
     inputSummary,
     kind: "tool_call",
     tool,

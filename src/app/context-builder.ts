@@ -280,7 +280,7 @@ function collectRecentConversationTurns(turns: TurnRecord[]): {
         tool_calls: [
           {
             function: {
-              arguments: turn.inputSummary,
+              arguments: turn.inputArguments ?? turn.inputSummary,
               name: turn.tool
             },
             id: turn.toolCallId,

@@ -155,6 +155,7 @@ export const turnTextSchema = z.object({
 export const turnToolCallSchema = z.object({
   at: z.string(),
   id: z.string(),
+  inputArguments: z.string().optional(),
   inputSummary: z.string(),
   kind: z.literal("tool_call"),
   tool: toolNameSchema,
