@@ -187,6 +187,98 @@ describe("createOpenAICompatibleClient", () => {
     });
   });
 
+  it("rejects orphan tool messages before making a provider request", async () => {
+    const fetchImpl = vi.fn();
+    const client = createOpenAICompatibleClient({
+      apiKey: "secret",
+      baseUrl: "http://localhost:1234/v1",
+      fetchImpl,
+      model: "gpt-4.1-mini"
+    });
+
+    await expect(
+      client.runTools({
+        messages: [
+          {
+            content: "system",
+            role: "system"
+          },
+          {
+            content: "{\"ok\":true}",
+            role: "tool",
+            tool_call_id: "call-1"
+          }
+        ],
+        tools: []
+      })
+    ).rejects.toThrow(/does not immediately follow its assistant tool_calls block/);
+
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it("sends valid assistant and tool replay transcripts to the provider", async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          choices: [
+            {
+              message: {
+                content: "Replay transcript accepted."
+              }
+            }
+          ]
+        }),
+        {
+          status: 200,
+          headers: {
+            "content-type": "application/json"
+          }
+        }
+      )
+    );
+    const client = createOpenAICompatibleClient({
+      apiKey: "secret",
+      baseUrl: "http://localhost:1234/v1",
+      fetchImpl,
+      model: "gpt-4.1-mini"
+    });
+
+    await expect(
+      client.runTools({
+        messages: [
+          {
+            content: "system",
+            role: "system"
+          },
+          {
+            content: "",
+            role: "assistant",
+            tool_calls: [
+              {
+                id: "call-1",
+                type: "function",
+                function: {
+                  arguments: "{\"path\":\"src/config.ts\"}",
+                  name: "read_file"
+                }
+              }
+            ]
+          },
+          {
+            content: "{\"ok\":true}",
+            role: "tool",
+            tool_call_id: "call-1"
+          }
+        ],
+        tools: []
+      })
+    ).resolves.toEqual({
+      text: "Replay transcript accepted."
+    });
+
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
   it("runs tool calls before returning the final assistant text", async () => {
     const fetchImpl = vi
       .fn()
@@ -606,5 +698,43 @@ describe("createOpenAICompatibleClient", () => {
         toolCallId: "call-1"
       }
     );
+
+    const secondCall = fetchImpl.mock.calls[1];
+    expect(typeof secondCall?.[1]?.body).toBe("string");
+    const requestBody = JSON.parse(String(secondCall?.[1]?.body)) as {
+      messages: Array<{
+        content?: string;
+        role: string;
+        tool_call_id?: string;
+        tool_calls?: Array<{
+          id: string;
+          type: "function";
+          function: {
+            arguments: string;
+            name: string;
+          };
+        }>;
+      }>;
+    };
+
+    expect(requestBody.messages.at(-2)).toEqual({
+      content: "",
+      role: "assistant",
+      tool_calls: [
+        {
+          id: "call-1",
+          type: "function",
+          function: {
+            arguments: "{\"path\":\"src/config.ts\"}",
+            name: "read_file"
+          }
+        }
+      ]
+    });
+    expect(requestBody.messages.at(-1)).toEqual({
+      content: "{\"ok\":true}",
+      role: "tool",
+      tool_call_id: "call-1"
+    });
   });
 });

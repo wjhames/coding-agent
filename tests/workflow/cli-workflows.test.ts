@@ -235,6 +235,124 @@ describe("black-box cli workflows", () => {
   );
 
   it(
+    "keeps replay history pair-aligned when approval resume follows multiple prior tool exchanges",
+    async () => {
+      const workspace = await makeWorkspace();
+      const command = "printf 'run\\n' >> approval-runs.log";
+      const llm = await createRequestAwareMockLlmServer({
+        onRequest(request, requestIndex) {
+          if (requestIndex === 0) {
+            return toolCallResponse("write_plan", {
+              summary: "First plan",
+              items: [
+                {
+                  content: "Inspect requirements",
+                  status: "in_progress"
+                }
+              ]
+            });
+          }
+
+          if (requestIndex === 1) {
+            return toolCallResponse("write_plan", {
+              summary: "Second plan",
+              items: [
+                {
+                  content: "Draft implementation",
+                  status: "completed"
+                }
+              ]
+            });
+          }
+
+          if (requestIndex === 2) {
+            return toolCallResponse("run_shell", { command });
+          }
+
+          if (requestIndex === 3) {
+            const body =
+              request.body && typeof request.body === "object"
+                ? (request.body as {
+                    messages?: Array<{
+                      content?: string;
+                      role?: string;
+                      tool_call_id?: string;
+                      tool_calls?: Array<{ id?: string }>;
+                    }>;
+                  })
+                : {};
+            const messages = (body.messages ?? []).filter((message) => message.role !== "system");
+            const firstReplayMessage = messages[0];
+            const hasLeadingOrphanTool = firstReplayMessage?.role === "tool";
+            const hasBrokenPairing = messages.some((message, index) => {
+              if (message.role !== "tool" || !message.tool_call_id) {
+                return false;
+              }
+
+              const previousMessage = messages[index - 1];
+              return (
+                previousMessage?.role !== "assistant" ||
+                !previousMessage.tool_calls?.some((toolCall) => toolCall.id === message.tool_call_id)
+              );
+            });
+
+            if (hasLeadingOrphanTool || hasBrokenPairing) {
+              return {
+                status: 400,
+                body: {
+                  error: {
+                    message:
+                      "messages with role \"tool\" must be a response to a preceeding message with \"tool_calls\"."
+                  }
+                }
+              };
+            }
+
+            return finalResponse("Created the file once.");
+          }
+
+          return finalResponse("Created the file once.");
+        }
+      });
+      const homeDir = await makeHomeDir(llm.baseUrl);
+
+      const paused = await runBuiltCli(
+        [
+          "exec",
+          "Create a file using the shell",
+          "--json",
+          "--cwd",
+          workspace,
+          "--approval-policy",
+          "prompt"
+        ],
+        homeDir
+      );
+
+      expect(paused.exitCode).toBe(2);
+      const pausedPayload = JSON.parse(paused.stdout);
+      expect(pausedPayload.status).toBe("paused");
+
+      const resumed = await runBuiltCli(
+        [
+          "resume",
+          pausedPayload.sessionId,
+          "--json",
+          "--approval-policy",
+          "auto"
+        ],
+        homeDir
+      );
+
+      expect(resumed.exitCode).toBe(0);
+      const resumedPayload = JSON.parse(resumed.stdout);
+      expect(resumedPayload.status).toBe("completed");
+      await expect(readFile(join(workspace, "approval-runs.log"), "utf8")).resolves.toBe("run\n");
+    },
+    20_000
+  );
+
+  it(
     "surfaces provider 400 details in json cli errors",
     async () => {
       const workspace = await makeWorkspace();

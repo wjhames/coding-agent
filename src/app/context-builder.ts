@@ -27,6 +27,11 @@ export interface ModelMessage {
     | undefined;
 }
 
+interface ReplayUnit {
+  messages: ModelMessage[];
+  startIndex: number;
+}
+
 export async function buildRequestContext(args: {
   changedFiles: string[];
   config: ResolvedExecutionConfig;
@@ -256,58 +261,89 @@ function collectRecentConversationTurns(turns: TurnRecord[]): {
   messages: ModelMessage[];
   rawCount: number;
 } {
-  const rawTurns = turns.slice(-12);
-  const recent = rawTurns.slice(-8);
-  const messages: ModelMessage[] = [];
-
-  for (const turn of recent) {
-    if (turn.kind === "assistant" || turn.kind === "user") {
-      messages.push({
-        content: turn.text,
-        role: turn.kind === "assistant" ? "assistant" : "user"
-      });
-      continue;
-    }
-
-    if (turn.kind === "tool_call") {
-      if (!turn.toolCallId) {
-        continue;
-      }
-
-      messages.push({
-        content: "",
-        role: "assistant",
-        tool_calls: [
-          {
-            function: {
-              arguments: turn.inputArguments ?? turn.inputSummary,
-              name: turn.tool
-            },
-            id: turn.toolCallId,
-            type: "function"
-          }
-        ]
-      });
-      continue;
-    }
-
-    if (turn.kind === "tool_result") {
-      if (!turn.toolCallId || turn.content === undefined) {
-        continue;
-      }
-
-      messages.push({
-        content: turn.content,
-        role: "tool",
-        tool_call_id: turn.toolCallId
-      });
-    }
-  }
+  const recentUnits = collectReplayUnits(turns).slice(-8);
+  const messages = recentUnits.flatMap((unit) => unit.messages);
 
   return {
     messages,
-    rawCount: recent.length
+    rawCount: recentUnits.length === 0 ? 0 : Math.max(0, turns.length - recentUnits[0]!.startIndex)
   };
+}
+
+function collectReplayUnits(turns: TurnRecord[]): ReplayUnit[] {
+  const replayableTurns = turns
+    .map((turn, index) => ({ index, turn }))
+    .filter(({ turn }) =>
+      turn.kind === "assistant" ||
+      turn.kind === "tool_call" ||
+      turn.kind === "tool_result" ||
+      turn.kind === "user"
+    );
+  const units: ReplayUnit[] = [];
+
+  for (let index = 0; index < replayableTurns.length; index += 1) {
+    const entry = replayableTurns[index];
+
+    if (!entry) {
+      continue;
+    }
+
+    const { turn } = entry;
+
+    if (turn.kind === "assistant" || turn.kind === "user") {
+      units.push({
+        messages: [
+          {
+            content: turn.text,
+            role: turn.kind === "assistant" ? "assistant" : "user"
+          }
+        ],
+        startIndex: entry.index
+      });
+      continue;
+    }
+
+    if (turn.kind !== "tool_call" || !turn.toolCallId) {
+      continue;
+    }
+
+    const nextEntry = replayableTurns[index + 1];
+    if (!nextEntry || nextEntry.turn.kind !== "tool_result") {
+      continue;
+    }
+
+    if (nextEntry.turn.toolCallId !== turn.toolCallId || nextEntry.turn.content === undefined) {
+      continue;
+    }
+
+    units.push({
+      messages: [
+        {
+          content: "",
+          role: "assistant",
+          tool_calls: [
+            {
+              function: {
+                arguments: turn.inputArguments ?? turn.inputSummary,
+                name: turn.tool
+              },
+              id: turn.toolCallId,
+              type: "function"
+            }
+          ]
+        },
+        {
+          content: nextEntry.turn.content,
+          role: "tool",
+          tool_call_id: turn.toolCallId
+        }
+      ],
+      startIndex: entry.index
+    });
+    index += 1;
+  }
+
+  return units;
 }
 
 function summarizeOlderTurns(turns: TurnRecord[], recentRawCount: number): string | null {
