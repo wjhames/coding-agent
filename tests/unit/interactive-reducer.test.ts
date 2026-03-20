@@ -210,4 +210,123 @@ describe("interactive reducer", () => {
     expect(next.pendingApproval).toBeNull();
     expect(lines).toContain("Approval approved.");
   });
+
+  it("preserves the full streamed assistant response when the completion summary is shorter", () => {
+    const initial = createInteractiveModel({
+      cwd: "/tmp/workspace",
+      doctor: null,
+      recentSessions: []
+    });
+    const fullText = [
+      "Here is the full answer.",
+      "",
+      "This second paragraph should stay visible after the run completes."
+    ].join("\n");
+    const streamed = applyRuntimeEventToModel(initial, {
+      at: "2026-03-19T00:00:00.000Z",
+      delta: fullText,
+      type: "assistant_delta"
+    });
+    const withAssistantMessage = applyRuntimeEventToModel(streamed, {
+      at: "2026-03-19T00:00:01.000Z",
+      text: fullText,
+      type: "assistant_message"
+    });
+
+    const next = applyCommandResultToModel(withAssistantMessage, {
+      approvals: [],
+      artifacts: [],
+      changedFiles: [],
+      context: emptyContextSnapshot(),
+      exitCode: 0,
+      guidance: emptyGuidanceSummary(),
+      nextActions: [],
+      observations: [],
+      pendingApproval: null,
+      plan: null,
+      repoContext: {
+        guidanceFiles: [],
+        isGitRepo: true,
+        packageScripts: {},
+        topLevelEntries: ["package.json"]
+      },
+      resumeCommand: null,
+      sessionId: "session-2",
+      status: "completed",
+      summary: `${fullText}\n\nVerification not run: Verification has not run yet.`,
+      turnCount: 1,
+      verification: {
+        commands: [],
+        inferred: true,
+        notRunReason: "Verification has not run yet.",
+        passed: false,
+        ran: false,
+        runs: [],
+        selectedCommands: [],
+        skippedCommands: [],
+        status: "not_run"
+      }
+    });
+
+    const assistantBlocks = next.blocks.filter((block) => block.kind === "assistant");
+    const lines = next.blocks.flatMap((block) => block.lines);
+
+    expect(assistantBlocks).toHaveLength(1);
+    expect(assistantBlocks[0]?.lines.join("\n")).toBe(fullText);
+    expect(lines).toContain("This second paragraph should stay visible after the run completes.");
+    expect(lines).toContain("Completed.");
+  });
+
+  it("replaces a shorter streamed assistant block when the final summary extends it", () => {
+    const initial = createInteractiveModel({
+      cwd: "/tmp/workspace",
+      doctor: null,
+      recentSessions: []
+    });
+    const streamed = applyRuntimeEventToModel(initial, {
+      at: "2026-03-19T00:00:00.000Z",
+      delta: "Started answer",
+      type: "assistant_delta"
+    });
+
+    const next = applyCommandResultToModel(streamed, {
+      approvals: [],
+      artifacts: [],
+      changedFiles: [],
+      context: emptyContextSnapshot(),
+      exitCode: 0,
+      guidance: emptyGuidanceSummary(),
+      nextActions: [],
+      observations: [],
+      pendingApproval: null,
+      plan: null,
+      repoContext: {
+        guidanceFiles: [],
+        isGitRepo: true,
+        packageScripts: {},
+        topLevelEntries: ["package.json"]
+      },
+      resumeCommand: null,
+      sessionId: "session-3",
+      status: "completed",
+      summary: "Started answer with the final wording.",
+      turnCount: 1,
+      verification: {
+        commands: [],
+        inferred: true,
+        notRunReason: "Verification has not run yet.",
+        passed: false,
+        ran: false,
+        runs: [],
+        selectedCommands: [],
+        skippedCommands: [],
+        status: "not_run"
+      }
+    });
+
+    const assistantBlocks = next.blocks.filter((block) => block.kind === "assistant");
+
+    expect(assistantBlocks).toHaveLength(1);
+    expect(assistantBlocks[0]?.lines.join("\n")).toBe("Started answer with the final wording.");
+  });
 });

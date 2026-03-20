@@ -451,12 +451,24 @@ function appendFinalAssistantSummary(
   const lastAssistantIndex = findLastAssistantIndex(settled);
   const lastText =
     lastAssistantIndex >= 0 ? settled.blocks[lastAssistantIndex]?.lines.join("\n").trim() ?? null : null;
+  const normalizedSummaryText = summaryText.trim();
+  const normalizedLastText = lastText?.trim() ?? null;
+  const hasTrailingBlocksAfterLastAssistant =
+    lastAssistantIndex >= 0 && lastAssistantIndex < settled.blocks.length - 1;
+
+  if (
+    normalizedLastText !== null &&
+    (normalizedLastText === normalizedSummaryText || normalizedLastText.startsWith(normalizedSummaryText)) &&
+    !hasTrailingBlocksAfterLastAssistant
+  ) {
+    return settled;
+  }
+
   const shouldReplaceLastAssistant =
     lastAssistantIndex >= 0 &&
-    lastText !== null &&
-    (summaryText === lastText ||
-      summaryText.startsWith(lastText) ||
-      lastText.startsWith(summaryText));
+    normalizedLastText !== null &&
+    normalizedSummaryText.startsWith(normalizedLastText) &&
+    !hasTrailingBlocksAfterLastAssistant;
 
   const blocks = shouldReplaceLastAssistant
     ? [
@@ -466,7 +478,7 @@ function appendFinalAssistantSummary(
     : settled.blocks;
   const lastBlock = blocks.at(-1);
 
-  if (lastBlock?.kind === "assistant" && lastBlock.lines.join("\n").trim() === summaryText.trim()) {
+  if (lastBlock?.kind === "assistant" && lastBlock.lines.join("\n").trim() === normalizedSummaryText) {
     return {
       ...settled,
       blocks

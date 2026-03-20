@@ -34,6 +34,44 @@ describe("interactive regressions", () => {
   });
 
   it(
+    "keeps the full assistant response visible after completion",
+    async () => {
+      const workspace = await makeWorkspace();
+      const finalText = [
+        "Here is the first paragraph.",
+        "",
+        "This second paragraph should remain visible after completion."
+      ].join("\n");
+      const llm = await createMockLlmServer([finalResponse(finalText)]);
+      const homeDir = await makeHomeDir(llm.baseUrl);
+      await ensureBuiltCli();
+      const session = spawnInteractiveCli({
+        cwd: workspace,
+        distCli,
+        homeDir,
+        repoRoot
+      });
+
+      try {
+        await waitForOutput(session, "Type a task", 8_000);
+        await typeText(session.stdin, "Just answer the question");
+        session.stdin.write("\r");
+        await waitForOutput(session, "Completed.", 8_000);
+
+        const output = session.getOutput();
+        expect(output).toContain("Here is the first paragraph.");
+        expect(output).toMatch(
+          /This second paragraph should remain visible after\s+completion\./
+        );
+      } finally {
+        session.stdin.write("\u0003");
+        await waitForExit(session.child, 5_000).catch(() => undefined);
+      }
+    },
+    20_000
+  );
+
+  it(
     "does not duplicate approval acknowledgement after a single approval",
     async () => {
       const workspace = await makeWorkspace({
