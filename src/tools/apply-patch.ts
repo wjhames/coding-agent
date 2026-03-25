@@ -126,11 +126,27 @@ export async function applyPatchOperations(args: {
   cwd: string;
   operations: PatchOperation[];
 }): Promise<string> {
+  const staged = await stagePatchOperations(args.cwd, args.operations);
   const changedFiles = new Set<string>();
   const artifacts: Artifact[] = [];
+  const appliedPaths = new Set<string>();
 
-  for (const operation of args.operations) {
-    const artifact = await applyOperation(args.cwd, operation);
+  try {
+    for (const operation of staged) {
+      await applyPlannedOperation(operation);
+      appliedPaths.add(operation.resolvedPath);
+    }
+  } catch (error) {
+    await rollbackPatchOperations(staged, appliedPaths);
+    throw error;
+  }
+
+  for (const operation of staged) {
+    const artifact = await createDiffArtifact({
+      after: operation.after,
+      before: operation.before,
+      path: operation.relativePath
+    });
     changedFiles.add(artifact.path);
     artifacts.push(artifact);
   }
@@ -151,50 +167,129 @@ export async function applyPatchOperations(args: {
   });
 }
 
-async function applyOperation(cwd: string, operation: PatchOperation): Promise<Artifact> {
-  const resolvedPath = resolveWorkspacePath(cwd, operation.path);
-  const relativePath = toWorkspaceRelativePath(cwd, operation.path);
-  const before = await readMaybeFile(resolvedPath);
+interface PlannedPatchOperation {
+  after: string | null;
+  before: string | null;
+  relativePath: string;
+  resolvedPath: string;
+}
 
+async function stagePatchOperations(
+  cwd: string,
+  operations: PatchOperation[]
+): Promise<PlannedPatchOperation[]> {
+  const originalContents = new Map<string, string | null>();
+  const currentContents = new Map<string, string | null>();
+  const staged: PlannedPatchOperation[] = [];
+
+  for (const operation of operations) {
+    const resolvedPath = resolveWorkspacePath(cwd, operation.path);
+    const relativePath = toWorkspaceRelativePath(cwd, operation.path);
+
+    if (!originalContents.has(resolvedPath)) {
+      const before = await readMaybeFile(resolvedPath);
+      originalContents.set(resolvedPath, before);
+      currentContents.set(resolvedPath, before);
+    }
+
+    const before = currentContents.get(resolvedPath) ?? null;
+    const after = planOperation(before, operation);
+    currentContents.set(resolvedPath, after);
+    staged.push({
+      after,
+      before,
+      relativePath,
+      resolvedPath
+    });
+  }
+
+  return staged;
+}
+
+function planOperation(
+  before: string | null,
+  operation: PatchOperation
+): string | null {
   if (operation.type === "replace") {
     if (before === null) {
       throw new Error(`Cannot replace text in missing file \`${operation.path}\`.`);
     }
 
-    if (!before.includes(operation.oldText)) {
+    const matchCount = countOccurrences(before, operation.oldText);
+    if (matchCount === 0) {
       throw new Error(`Old text was not found in \`${operation.path}\`.`);
     }
 
-    const after = before.replace(operation.oldText, operation.newText);
-    await writeFile(resolvedPath, after, "utf8");
+    if (matchCount !== 1) {
+      throw new Error(`Old text must match exactly once in \`${operation.path}\`.`);
+    }
 
-    return createDiffArtifact({
-      after,
-      before,
-      path: relativePath
-    });
+    return before.replace(operation.oldText, operation.newText);
   }
 
   if (operation.type === "create") {
-    await mkdir(dirname(resolvedPath), { recursive: true });
-    await writeFile(resolvedPath, operation.content, "utf8");
+    if (before !== null) {
+      throw new Error(`Cannot create \`${operation.path}\`` + " because it already exists.");
+    }
 
-    return createDiffArtifact({
-      after: operation.content,
-      before,
-      path: relativePath
-    });
+    return operation.content;
   }
 
   if (before === null) {
     throw new Error(`Cannot delete missing file \`${operation.path}\`.`);
   }
 
-  await rm(resolvedPath, { force: true });
+  return null;
+}
 
-  return createDiffArtifact({
-    after: null,
-    before,
-    path: relativePath
-  });
+async function applyPlannedOperation(operation: PlannedPatchOperation): Promise<void> {
+  if (operation.after === null) {
+    await rm(operation.resolvedPath, { force: true });
+    return;
+  }
+
+  await mkdir(dirname(operation.resolvedPath), { recursive: true });
+  await writeFile(operation.resolvedPath, operation.after, "utf8");
+}
+
+async function rollbackPatchOperations(
+  operations: PlannedPatchOperation[],
+  appliedPaths: Set<string>
+): Promise<void> {
+  const originals = new Map<string, string | null>();
+
+  for (const operation of operations) {
+    if (!appliedPaths.has(operation.resolvedPath) || originals.has(operation.resolvedPath)) {
+      continue;
+    }
+
+    originals.set(operation.resolvedPath, operation.before);
+  }
+
+  for (const [resolvedPath, before] of originals) {
+    if (before === null) {
+      await rm(resolvedPath, { force: true });
+      continue;
+    }
+
+    await mkdir(dirname(resolvedPath), { recursive: true });
+    await writeFile(resolvedPath, before, "utf8");
+  }
+}
+
+function countOccurrences(haystack: string, needle: string): number {
+  let count = 0;
+  let index = 0;
+
+  while (index <= haystack.length) {
+    const next = haystack.indexOf(needle, index);
+    if (next === -1) {
+      break;
+    }
+
+    count += 1;
+    index = next + needle.length;
+  }
+
+  return count;
 }
