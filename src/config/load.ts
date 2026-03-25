@@ -70,6 +70,27 @@ export function resolveExecutionConfig(args: {
   };
 }
 
+export function parseTimeoutToMs(timeout: string | undefined): number | undefined {
+  if (timeout === undefined) {
+    return undefined;
+  }
+
+  const match = timeout.trim().match(/^(\d+)(ms|s|m)?$/);
+  if (!match) {
+    throw new ConfigError(
+      "`--timeout` must be a positive integer in milliseconds or use the suffixes ms, s, or m."
+    );
+  }
+
+  const value = Number.parseInt(match[1] ?? "", 10);
+  if (!Number.isInteger(value) || value < 1) {
+    throw new ConfigError("`--timeout` must be greater than 0.");
+  }
+
+  const unit = match[2] ?? "ms";
+  return unit === "ms" ? value : unit === "s" ? value * 1_000 : value * 60_000;
+}
+
 export interface ResolvedLlmConfig {
   apiKey: string;
   baseUrl: string;

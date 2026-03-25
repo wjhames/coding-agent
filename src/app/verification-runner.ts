@@ -4,6 +4,7 @@ import type { VerificationSummary } from "../runtime/contracts.js";
 export async function runVerificationCommands(args: {
   commands: string[];
   cwd: string;
+  timeoutMs?: number | undefined;
   skippedCommands?: Array<{
     command: string;
     reason: string;
@@ -28,7 +29,8 @@ export async function runVerificationCommands(args: {
   for (const command of args.commands) {
     const result = await executeShellCommand({
       command,
-      cwd: args.cwd
+      cwd: args.cwd,
+      timeoutMs: args.timeoutMs
     });
     const run = shellResultToVerificationRun({
       command,

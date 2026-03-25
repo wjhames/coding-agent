@@ -191,6 +191,34 @@ describe("outside-in feature gaps", () => {
     await expect(readFile(join(root, "escape.txt"), "utf8")).rejects.toThrow();
   });
 
+  it("blocks compound shell commands that start read-only but later write outside the workspace", async () => {
+    const root = await mkdtemp(join(os.tmpdir(), "coding-agent-outside-in-compound-"));
+    tempDirs.push(root);
+    const workspace = join(root, "workspace");
+    await mkdir(join(workspace, ".git"), { recursive: true });
+
+    const llm = await createMockLlmServer([
+      toolCallResponse("run_shell", {
+        command: "pwd && touch ../escape.txt"
+      }),
+      finalResponse("Created the file.")
+    ]);
+    const homeDir = await makeHomeDir(llm.baseUrl, "prompt");
+
+    const run = await runBuiltCli(
+      ["exec", "Create a file just outside the workspace", "--json", "--cwd", workspace],
+      homeDir
+    );
+    const payload = JSON.parse(run.stdout) as {
+      status: string;
+      summary: string;
+    };
+
+    expect(payload.status).toBe("failed");
+    expect(payload.summary).toContain("outside the workspace");
+    await expect(readFile(join(root, "escape.txt"), "utf8")).rejects.toThrow();
+  });
+
   it("surfaces approval-policy never as a first-class failed run with rejected approval details", async () => {
     const workspace = await makeWorkspace();
     const llm = await createMockLlmServer([
@@ -291,5 +319,29 @@ describe("outside-in feature gaps", () => {
     expect(run.stdout).toBe("");
     const written = JSON.parse(await readFile(outputPath, "utf8")) as Array<{ status: string }>;
     expect(written[0]?.status).toBe("completed");
+  });
+
+  it("enforces the exposed --timeout flag for shell execution", async () => {
+    const workspace = await makeWorkspace();
+    const llm = await createMockLlmServer([
+      toolCallResponse("run_shell", {
+        command: "sleep 2"
+      }),
+      finalResponse("Finished.")
+    ]);
+    const homeDir = await makeHomeDir(llm.baseUrl, "auto");
+
+    const run = await runBuiltCli(
+      ["exec", "Sleep briefly", "--json", "--cwd", workspace, "--timeout", "1ms"],
+      homeDir
+    );
+    const payload = JSON.parse(run.stdout) as {
+      status: string;
+      summary: string;
+    };
+
+    expect(run.exitCode).toBe(1);
+    expect(payload.status).toBe("failed");
+    expect(payload.summary.toLowerCase()).toContain("timeout");
   });
 });

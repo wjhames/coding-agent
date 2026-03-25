@@ -6,7 +6,7 @@ import { buildVerificationFailurePrompt } from "./prompts.js";
 import { emitRuntimeEvent, runModelLoop } from "./model-loop.js";
 import type { RepoContext } from "../app/context.js";
 import type { LoadedGuidance } from "../app/guidance.js";
-import type { ResolvedExecutionConfig } from "../config/load.js";
+import { parseTimeoutToMs, type ResolvedExecutionConfig } from "../config/load.js";
 import { createOpenAICompatibleClient } from "../llm/openai-client.js";
 
 export async function runVerificationCycle(args: {
@@ -22,6 +22,7 @@ export async function runVerificationCycle(args: {
   verificationCommands: string[];
 }): Promise<{ summary: string }> {
   let summary = "";
+  const timeoutMs = parseTimeoutToMs(args.config.timeout);
   const shouldForceVerificationPass =
     args.state.verification.status === "not_run" || args.state.verification.ran === false;
 
@@ -41,7 +42,8 @@ export async function runVerificationCycle(args: {
       cwd: args.cwd,
       observer: args.observer,
       skippedCommands: args.skippedCommands,
-      state: args.state
+      state: args.state,
+      timeoutMs
     });
   }
 
@@ -77,7 +79,8 @@ export async function runVerificationCycle(args: {
       cwd: args.cwd,
       observer: args.observer,
       skippedCommands: args.skippedCommands,
-      state: args.state
+      state: args.state,
+      timeoutMs
     });
   }
 
@@ -104,6 +107,7 @@ async function runVerificationPass(args: {
   observer: RuntimeObserver | undefined;
   skippedCommands: Array<{ command: string; reason: string }>;
   state: ExecutionState;
+  timeoutMs?: number | undefined;
 }) {
   emitRuntimeEvent(args.observer, {
     at: new Date().toISOString(),
@@ -121,6 +125,7 @@ async function runVerificationPass(args: {
   const verification = await runVerificationCommands({
     commands: args.commands,
     cwd: args.cwd,
+    timeoutMs: args.timeoutMs,
     skippedCommands: args.skippedCommands
   });
   const previousCount = args.state.verification.runs.length;

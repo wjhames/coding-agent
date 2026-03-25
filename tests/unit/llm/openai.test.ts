@@ -110,6 +110,45 @@ describe("createOpenAICompatibleClient", () => {
     );
   });
 
+  it("passes an abort signal to provider requests when a timeout is configured", async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          choices: [
+            {
+              message: {
+                content: "plan the work"
+              }
+            }
+          ]
+        }),
+        {
+          status: 200,
+          headers: {
+            "content-type": "application/json"
+          }
+        }
+      )
+    );
+
+    const client = createOpenAICompatibleClient({
+      apiKey: "secret",
+      baseUrl: "http://localhost:1234/v1",
+      fetchImpl,
+      model: "gpt-4.1-mini",
+      timeoutMs: 5
+    });
+
+    await client.complete({
+      systemPrompt: "system",
+      userPrompt: "user"
+    });
+
+    const options = fetchImpl.mock.calls[0]?.[1] as { signal?: AbortSignal } | undefined;
+    expect(options?.signal).toBeDefined();
+    expect(typeof options?.signal?.aborted).toBe("boolean");
+  });
+
   it("joins text parts when the API returns content blocks", async () => {
     const fetchImpl = vi.fn().mockResolvedValue(
       new Response(

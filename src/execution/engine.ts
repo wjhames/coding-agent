@@ -6,6 +6,7 @@ import { loadGuidance } from "../app/guidance.js";
 import { planVerificationCommands } from "../app/verification.js";
 import {
   loadConfig,
+  parseTimeoutToMs,
   resolveExecutionConfig,
   resolveLlmConfig
 } from "../config/load.js";
@@ -220,7 +221,8 @@ async function continueExec(args: {
   await executePendingAction({
     cwd: args.session.cwd,
     observer: args.observer,
-    state
+    state,
+    timeoutMs: parseTimeoutToMs(resolvedConfig.timeout)
   });
 
   return executeTask({
@@ -258,6 +260,7 @@ async function executeTask(args: {
     config,
     executionConfig: resolvedConfig
   });
+  const timeoutMs = parseTimeoutToMs(resolvedConfig.timeout);
   let repoContext = await collectRepoContext(args.cwd);
   let repoContextSummary = toRepoContextSummary(repoContext);
   const readOnlyTask = isLikelyReadOnlyTask(args.prompt);
@@ -310,6 +313,7 @@ async function executeTask(args: {
     apiKey: llmConfig.apiKey,
     baseUrl: llmConfig.baseUrl,
     model: llmConfig.model,
+    timeoutMs,
     ...(args.fetchImpl ? { fetchImpl: args.fetchImpl } : {})
   });
 
@@ -562,6 +566,7 @@ async function executePendingAction(args: {
   cwd: string;
   observer: RuntimeObserver | undefined;
   state: ExecutionState;
+  timeoutMs?: number | undefined;
 }): Promise<void> {
   if (args.state.pendingAction === null) {
     return;
@@ -642,7 +647,8 @@ async function executePendingAction(args: {
           addVerificationRun(args.state, run);
         },
         command: pendingAction.action.command,
-        cwd: args.cwd
+        cwd: args.cwd,
+        timeoutMs: args.timeoutMs
       }, args.state.verification.selectedCommands);
     }
 

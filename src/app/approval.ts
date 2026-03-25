@@ -1,6 +1,11 @@
 import { randomUUID } from "node:crypto";
 import type { Approval, PatchOperation, PendingAction } from "../runtime/contracts.js";
 import type { ResolvedExecutionConfig } from "../config/load.js";
+import {
+  isReadOnlyShellSegment,
+  normalizeShellCommand as normalizeParsedShellCommand,
+  parseShellCommandSegments
+} from "./shell.js";
 
 export type { PendingAction } from "../runtime/contracts.js";
 
@@ -132,40 +137,10 @@ export function isShellCommandNetworked(command: string): boolean {
 }
 
 export function isShellCommandReadOnly(command: string): boolean {
-  const lowered = normalizeShellCommand(command);
-  return [
-    /^git status(?:\s|$)/,
-    /^git diff(?:\s|$)/,
-    /^pwd(?:\s|$)/,
-    /^ls(?:\s|$)/,
-    /^find(?:\s|$)/,
-    /^rg(?:\s|$)/,
-    /^cat(?:\s|$)/,
-    /^sed\s+-n(?:\s|$)/,
-    /^head(?:\s|$)/,
-    /^tail(?:\s|$)/,
-    /^wc(?:\s|$)/,
-    /^stat(?:\s|$)/
-  ].some((pattern) => pattern.test(lowered));
+  const segments = parseShellCommandSegments(command);
+  return segments.length > 0 && segments.every((segment) => isReadOnlyShellSegment(segment));
 }
 
 export function normalizeShellCommand(command: string): string {
-  let normalized = command.trim();
-
-  while (true) {
-    const next = normalized
-      .replace(/^(?:[A-Za-z_][A-Za-z0-9_]*=(?:"[^"]*"|'[^']*'|\S+)\s+)+/, "")
-      .replace(/^set\s+-[A-Za-z]+\s*&&\s*/, "")
-      .replace(/^cd\s+(?:"[^"]+"|'[^']+'|\S+)\s*&&\s*/, "")
-      .trim();
-
-    if (next === normalized) {
-      break;
-    }
-
-    normalized = next;
-  }
-
-  const primarySegment = normalized.split("|")[0]?.trim() ?? normalized;
-  return primarySegment.replace(/\s+2>&1$/, "").trim().toLowerCase();
+  return normalizeParsedShellCommand(command);
 }

@@ -9,6 +9,13 @@ export interface ShellExecutionResult {
   stdout: string;
 }
 
+export interface ShellCommandSegment {
+  arguments: string[];
+  name: string | null;
+  operatorBefore: string | null;
+  tokens: string[];
+}
+
 export async function executeShellCommand(args: {
   command: string;
   cwd: string;
@@ -26,12 +33,53 @@ export async function executeShellCommand(args: {
 
     let stdout = "";
     let stderr = "";
-    const timer =
-      args.timeoutMs !== undefined
-        ? setTimeout(() => {
-            child.kill("SIGTERM");
-          }, args.timeoutMs)
-        : null;
+    let finished = false;
+    let timedOut = false;
+    const killTimer = args.timeoutMs !== undefined
+      ? setTimeout(() => {
+          timedOut = true;
+          child.kill("SIGTERM");
+        }, args.timeoutMs)
+      : null;
+    const forceKillTimer = args.timeoutMs !== undefined
+      ? setTimeout(() => {
+          if (!timedOut || finished) {
+            return;
+          }
+
+          child.kill("SIGKILL");
+        }, args.timeoutMs + 1_000)
+      : null;
+
+    const clearTimers = () => {
+      if (killTimer) {
+        clearTimeout(killTimer);
+      }
+
+      if (forceKillTimer) {
+        clearTimeout(forceKillTimer);
+      }
+    };
+
+    const finishWithError = (error: Error) => {
+      if (finished) {
+        return;
+      }
+
+      finished = true;
+      clearTimers();
+      reject(error);
+    };
+
+    const finishWithResult = (result: ShellExecutionResult) => {
+      if (finished) {
+        return;
+      }
+
+      finished = true;
+      clearTimers();
+      resolve(result);
+    };
 
     child.stdout.on("data", (chunk) => {
       stdout += String(chunk);
@@ -40,17 +88,17 @@ export async function executeShellCommand(args: {
       stderr += String(chunk);
     });
     child.on("error", (error) => {
-      if (timer) {
-        clearTimeout(timer);
-      }
-      reject(error);
+      finishWithError(error);
     });
     child.on("close", (code) => {
-      if (timer) {
-        clearTimeout(timer);
+      if (timedOut) {
+        finishWithError(
+          new Error(`Shell command timed out after ${args.timeoutMs}ms: \`${args.command}\`.`)
+        );
+        return;
       }
 
-      resolve({
+      finishWithResult({
         exitCode: code ?? 1,
         stderr: truncate(stderr),
         stdout: truncate(stdout)
@@ -77,7 +125,7 @@ export function assertShellWritesStayInWorkspace(args: {
 }): void {
   const context = resolveShellExecutionContext(args);
 
-  for (const target of findWriteTargets(context.tokens.slice(context.commandStartIndex))) {
+  for (const target of findWriteTargets(context.segments)) {
     try {
       resolveWorkspacePath(args.cwd, resolve(context.effectiveCwd, target));
     } catch {
@@ -92,13 +140,15 @@ function resolveShellExecutionContext(args: {
 }): {
   commandStartIndex: number;
   effectiveCwd: string;
+  segments: ShellCommandSegment[];
   tokens: string[];
 } {
   const tokens = tokenizeShellCommand(args.command);
+  const commandStartIndex = findCommandStartIndex(tokens);
   let effectiveCwd = args.cwd;
   let index = 0;
 
-  while (index < tokens.length) {
+  while (index < commandStartIndex) {
     while (index < tokens.length && isLeadingEnvironmentAssignment(tokens[index] ?? "")) {
       index += 1;
     }
@@ -129,8 +179,9 @@ function resolveShellExecutionContext(args: {
   }
 
   return {
-    commandStartIndex: index,
+    commandStartIndex,
     effectiveCwd,
+    segments: parseShellCommandSegmentsFromTokens(tokens, commandStartIndex),
     tokens
   };
 }
@@ -157,37 +208,77 @@ function findWriteRedirectTargets(tokens: string[]): string[] {
   return targets;
 }
 
-function findWriteTargets(tokens: string[]): string[] {
-  const redirectedTargets = findWriteRedirectTargets(tokens);
-  const explicitTargets = findExplicitWriteTargets(tokens);
+function findWriteTargets(segments: ShellCommandSegment[]): string[] {
+  const redirectedTargets = segments.flatMap((segment) => findWriteRedirectTargets(segment.tokens));
+  const explicitTargets = segments.flatMap((segment) => findExplicitWriteTargets(segment));
 
   return [...new Set([...redirectedTargets, ...explicitTargets])];
 }
 
-function findExplicitWriteTargets(tokens: string[]): string[] {
-  const command = firstCommandToken(tokens);
-
-  if (command === null) {
+function findExplicitWriteTargets(segment: ShellCommandSegment): string[] {
+  if (segment.name === null) {
     return [];
   }
 
-  const args = command.arguments.filter(
+  const args = segment.arguments.filter(
     (token) => token.length > 0 && !isShellControlOperator(token)
   );
 
-  if (command.name === "touch" || command.name === "mkdir") {
+  if (segment.name === "touch" || segment.name === "mkdir") {
     return args.filter((token) => !token.startsWith("-"));
   }
 
-  if ((command.name === "cp" || command.name === "mv") && args.length > 0) {
+  if ((segment.name === "cp" || segment.name === "mv") && args.length > 0) {
     return [args[args.length - 1] ?? ""].filter(Boolean);
   }
 
-  if (command.name === "tee") {
+  if (segment.name === "tee") {
     return args.filter((token) => !token.startsWith("-"));
   }
 
   return [];
+}
+
+export function normalizeShellCommand(command: string): string {
+  const segments = parseShellCommandSegments(command);
+  return segments
+    .map((segment, index) => {
+      const normalized = normalizeShellSegment(segment);
+      if (normalized.length === 0) {
+        return "";
+      }
+
+      return index === 0 ? normalized : `${segment.operatorBefore ?? ""} ${normalized}`.trim();
+    })
+    .filter((segment) => segment.length > 0)
+    .join(" ")
+    .trim()
+    .toLowerCase();
+}
+
+export function parseShellCommandSegments(command: string): ShellCommandSegment[] {
+  const tokens = tokenizeShellCommand(command);
+  return parseShellCommandSegmentsFromTokens(tokens, findCommandStartIndex(tokens));
+}
+
+export function isReadOnlyShellSegment(segment: ShellCommandSegment): boolean {
+  if (segment.name === null) {
+    return false;
+  }
+
+  if (segment.name === "git") {
+    return segment.arguments[0] === "status" || segment.arguments[0] === "diff";
+  }
+
+  if (segment.name === "sed") {
+    return segment.arguments[0] === "-n";
+  }
+
+  return READ_ONLY_COMMANDS.has(segment.name);
+}
+
+export function normalizeShellSegmentForComparison(segment: ShellCommandSegment): string {
+  return normalizeShellSegment(segment).toLowerCase();
 }
 
 function firstCommandToken(tokens: string[]): {
@@ -215,6 +306,99 @@ function firstCommandToken(tokens: string[]): {
   }
 
   return null;
+}
+
+function parseShellCommandSegmentsFromTokens(
+  tokens: string[],
+  commandStartIndex: number
+): ShellCommandSegment[] {
+  const segments: ShellCommandSegment[] = [];
+  let operatorBefore: string | null = null;
+  let current: string[] = [];
+
+  const pushSegment = () => {
+    if (current.length === 0) {
+      return;
+    }
+
+    const command = firstCommandToken(current);
+    segments.push({
+      arguments: command?.arguments ?? [],
+      name: command?.name ?? null,
+      operatorBefore,
+      tokens: current
+    });
+    current = [];
+  };
+
+  for (const token of tokens.slice(commandStartIndex)) {
+    if (isShellControlOperator(token)) {
+      pushSegment();
+      operatorBefore = token;
+      continue;
+    }
+
+    current.push(token);
+  }
+
+  pushSegment();
+
+  return segments;
+}
+
+function findCommandStartIndex(tokens: string[]): number {
+  let index = 0;
+
+  while (index < tokens.length) {
+    while (index < tokens.length && isLeadingEnvironmentAssignment(tokens[index] ?? "")) {
+      index += 1;
+    }
+
+    if (
+      tokens[index] === "set" &&
+      (tokens[index + 1]?.startsWith("-") ?? false) &&
+      tokens[index + 2] === "&&"
+    ) {
+      index += 3;
+      continue;
+    }
+
+    if (tokens[index] === "cd" && tokens[index + 1] && tokens[index + 2] === "&&") {
+      index += 3;
+      continue;
+    }
+
+    break;
+  }
+
+  return index;
+}
+
+function normalizeShellSegment(segment: ShellCommandSegment): string {
+  if (segment.name === null) {
+    return "";
+  }
+
+  const tokens = [segment.name, ...stripHarmlessComparisonTokens(segment.arguments)];
+  return tokens.join(" ").trim();
+}
+
+function stripHarmlessComparisonTokens(tokens: string[]): string[] {
+  const normalized: string[] = [];
+
+  for (let index = 0; index < tokens.length; index += 1) {
+    const token = tokens[index] ?? "";
+    const next = tokens[index + 1] ?? "";
+
+    if ((token === "2>" || token === "2>>") && next === "&1") {
+      index += 1;
+      continue;
+    }
+
+    normalized.push(token);
+  }
+
+  return normalized;
 }
 
 function tokenizeShellCommand(command: string): string[] {
@@ -311,6 +495,7 @@ function isShellControlOperator(token: string): boolean {
 }
 
 const WRITE_REDIRECTION_TOKENS = new Set([">", ">>", "1>", "1>>", "2>", "2>>", "&>", "&>>"]);
+const READ_ONLY_COMMANDS = new Set(["pwd", "ls", "find", "rg", "cat", "head", "tail", "wc", "stat"]);
 
 export function shellResultToVerificationRun(args: {
   command: string;

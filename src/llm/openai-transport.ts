@@ -40,6 +40,7 @@ export interface OpenAICompatibleClientConfig {
   baseUrl: string;
   fetchImpl?: typeof fetch;
   model: string;
+  timeoutMs?: number | undefined;
 }
 
 export interface OpenAICompatibleMessage {
@@ -161,6 +162,11 @@ export async function sendRequest(args: {
         authorization: `Bearer ${args.config.apiKey}`,
         "content-type": "application/json"
       },
+      ...(args.config.timeoutMs !== undefined
+        ? {
+            signal: AbortSignal.timeout(args.config.timeoutMs)
+          }
+        : {}),
       body: JSON.stringify({
         model: args.config.model,
         messages: args.messages,
@@ -208,6 +214,11 @@ export async function sendStreamingRequest(args: {
         authorization: `Bearer ${args.config.apiKey}`,
         "content-type": "application/json"
       },
+      ...(args.config.timeoutMs !== undefined
+        ? {
+            signal: AbortSignal.timeout(args.config.timeoutMs)
+          }
+        : {}),
       body: JSON.stringify({
         model: args.config.model,
         messages: args.messages,

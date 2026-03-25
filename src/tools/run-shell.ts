@@ -5,8 +5,7 @@ import {
   enforceApproval,
   isShellCommandDangerous,
   isShellCommandNetworked,
-  isShellCommandReadOnly,
-  normalizeShellCommand
+  isShellCommandReadOnly
 } from "../app/approval.js";
 import {
   assertShellWritesStayInWorkspace,
@@ -16,7 +15,7 @@ import {
 } from "../app/shell.js";
 import { diffWorkspaceSnapshots, snapshotWorkspace } from "../app/workspace-state.js";
 import { createDiffArtifact } from "../app/diff.js";
-import type { ResolvedExecutionConfig } from "../config/load.js";
+import { parseTimeoutToMs, type ResolvedExecutionConfig } from "../config/load.js";
 import type { Approval, Artifact, Observation, VerificationRun } from "../runtime/contracts.js";
 import type { LlmTool } from "../llm/openai-client.js";
 import { commandMatchesVerificationCommand } from "../app/verification.js";
@@ -38,6 +37,7 @@ export function createRunShellTool(args: {
   cwd: string;
   verificationCommands: string[];
 }): LlmTool {
+  const timeoutMs = parseTimeoutToMs(args.config.timeout);
   return {
     description: "Run a shell command inside the workspace.",
     inputJsonSchema: {
@@ -100,7 +100,8 @@ export function createRunShellTool(args: {
         addObservation: args.addObservation,
         addVerificationRun: args.addVerificationRun,
         command: parsed.command,
-        cwd: args.cwd
+        cwd: args.cwd,
+        timeoutMs
       }, args.verificationCommands);
     }
   };
@@ -113,11 +114,13 @@ export async function runShellAction(args: {
   addVerificationRun: (run: VerificationRun) => void;
   command: string;
   cwd: string;
+  timeoutMs?: number | undefined;
 }, verificationCommands: string[] = []): Promise<string> {
   const before = await snapshotWorkspace({ cwd: args.cwd });
   const result = await executeShellCommand({
     command: args.command,
-    cwd: args.cwd
+    cwd: args.cwd,
+    timeoutMs: args.timeoutMs
   });
   const after = await snapshotWorkspace({ cwd: args.cwd });
   const changedFiles = diffWorkspaceSnapshots({ after, before });
@@ -168,19 +171,20 @@ function shouldRequireApproval(args: {
   config: ResolvedExecutionConfig;
   verificationCommands: string[];
 }): boolean {
-  const normalizedCommand = normalizeCommandForApproval(args.command);
-
-  if (args.verificationCommands.some((command) => normalizeCommandForApproval(command) === normalizedCommand)) {
+  if (
+    args.verificationCommands.some((command) =>
+      commandMatchesVerificationCommand({
+        actual: args.command,
+        expected: command
+      })
+    )
+  ) {
     return false;
   }
 
-  if (isShellCommandReadOnly(normalizedCommand)) {
+  if (isShellCommandReadOnly(args.command)) {
     return false;
   }
 
   return true;
-}
-
-function normalizeCommandForApproval(command: string): string {
-  return normalizeShellCommand(command);
 }

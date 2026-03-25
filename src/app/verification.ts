@@ -1,4 +1,9 @@
 import { normalizeShellCommand } from "./approval.js";
+import {
+  isReadOnlyShellSegment,
+  normalizeShellSegmentForComparison,
+  parseShellCommandSegments
+} from "./shell.js";
 import type { VerificationRun, VerificationSummary } from "../runtime/contracts.js";
 
 export interface VerificationPlan {
@@ -103,7 +108,9 @@ export function commandMatchesVerificationCommand(args: {
   actual: string;
   expected: string;
 }): boolean {
-  return normalizeShellCommand(args.actual) === normalizeShellCommand(args.expected);
+  const actual = normalizeVerificationComparableCommand(args.actual);
+  const expected = normalizeVerificationComparableCommand(args.expected);
+  return actual !== null && expected !== null && actual === expected;
 }
 
 export function summarizeVerificationEvidence(args: {
@@ -208,4 +215,27 @@ function detectAssistantVerificationIntent(text: string): {
   }
 
   return detectVerificationIntent(text);
+}
+
+function normalizeVerificationComparableCommand(command: string): string | null {
+  const segments = parseShellCommandSegments(command);
+
+  if (segments.length === 0) {
+    return null;
+  }
+
+  const [primary, ...rest] = segments;
+  if (!primary) {
+    return null;
+  }
+
+  if (primary.name === null) {
+    return null;
+  }
+
+  if (rest.some((segment) => segment.operatorBefore !== "|" || !isReadOnlyShellSegment(segment))) {
+    return null;
+  }
+
+  return normalizeShellSegmentForComparison(primary) || normalizeShellCommand(command);
 }
