@@ -15,6 +15,7 @@ const tempDirs: string[] = [];
 const children = new Set<ChildProcess>();
 const execFileAsync = promisify(execFile);
 let built = false;
+const CLI_TIMEOUT_MS = 15_000;
 
 export async function ensureBuiltCli(): Promise<void> {
   if (built) {
@@ -117,8 +118,28 @@ export async function runBuiltCli(args: string[], homeDir: string): Promise<{
     stderr += String(chunk);
   });
 
-  const [exitCode] = (await once(child, "close")) as [number | null];
-  children.delete(child);
+  let exitCode: number | null;
+
+  try {
+    exitCode = await new Promise<number | null>((resolveClose, rejectClose) => {
+      const timeout = setTimeout(() => {
+        child.kill("SIGKILL");
+        rejectClose(new Error(`CLI process timed out after ${CLI_TIMEOUT_MS}ms.`));
+      }, CLI_TIMEOUT_MS);
+
+      once(child, "close")
+        .then(([code]) => {
+          clearTimeout(timeout);
+          resolveClose(code as number | null);
+        })
+        .catch((error) => {
+          clearTimeout(timeout);
+          rejectClose(error);
+        });
+    });
+  } finally {
+    children.delete(child);
+  }
 
   return {
     exitCode: exitCode ?? 1,
