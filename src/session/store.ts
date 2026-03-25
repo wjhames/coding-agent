@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
-import { readdir, readFile, writeFile } from "node:fs/promises";
-import { basename } from "node:path";
+import { open, readdir, readFile, rename, writeFile } from "node:fs/promises";
+import { basename, dirname, join } from "node:path";
 import {
   createSessionRecord,
   sessionRecordSchema,
@@ -49,17 +49,26 @@ export async function updateSession(
   }
 
   const session = updateSessionRecord(existing, input);
-  await saveSession(session, homeDir);
+  await saveSession(session, homeDir, existing.updatedAt);
   return session;
 }
 
 export async function saveSession(
   session: SessionRecord,
-  homeDir?: string
+  homeDir?: string,
+  expectedUpdatedAt?: string
 ): Promise<void> {
   await ensureSessionRoot(homeDir);
   const path = getSessionFilePath(session.id, homeDir);
-  await writeFile(path, `${JSON.stringify(session, null, 2)}\n`, "utf8");
+
+  if (expectedUpdatedAt !== undefined) {
+    const current = await loadSession(session.id, homeDir);
+    if (current === null || current.updatedAt !== expectedUpdatedAt) {
+      throw new SessionStoreError(`Session \`${session.id}\` changed on disk before it could be saved.`);
+    }
+  }
+
+  await writeFileAtomic(path, `${JSON.stringify(session, null, 2)}\n`);
 }
 
 export async function loadSession(
@@ -128,4 +137,32 @@ function isMissingFileError(error: unknown): boolean {
     "code" in error &&
     error.code === "ENOENT"
   );
+}
+
+async function writeFileAtomic(path: string, contents: string): Promise<void> {
+  const tempPath = join(dirname(path), `.${basename(path)}.${randomUUID()}.tmp`);
+  const handle = await open(tempPath, "w");
+
+  try {
+    await handle.writeFile(contents, "utf8");
+    await handle.sync();
+  } finally {
+    await handle.close();
+  }
+
+  await rename(tempPath, path);
+  await fsyncDirectory(dirname(path));
+}
+
+async function fsyncDirectory(path: string): Promise<void> {
+  let handle;
+
+  try {
+    handle = await open(path, "r");
+    await handle.sync();
+  } catch {
+    // Best-effort directory sync. Some platforms or filesystems do not support it.
+  } finally {
+    await handle?.close();
+  }
 }
