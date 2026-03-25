@@ -11,6 +11,7 @@ import {
 import {
   cleanupMockLlmServers,
   createMockLlmServer,
+  createStreamingMockLlmServer,
   finalResponse,
   toolCallResponse
 } from "../helpers/mock-llm.js";
@@ -225,6 +226,30 @@ describe("cli feature coverage", () => {
     expect(sessionsRun.exitCode).toBe(0);
     expect(sessionsRun.stdout).toContain(execPayload.sessionId);
     expect(sessionsRun.stdout).toContain("completed");
+  });
+
+  it("completes exec json when the provider sends [DONE] without closing the stream", async () => {
+    const workspace = await makeWorkspace();
+    const llm = await createStreamingMockLlmServer([
+      {
+        chunks: [
+          "data: {\"choices\":[{\"delta\":{\"content\":\"Inspected the workspace.\"}}]}\n\n",
+          "data: [DONE]\n\n"
+        ],
+        keepOpen: true
+      }
+    ]);
+    const homeDir = await makeHomeDir(llm.baseUrl, "auto");
+
+    const run = await runBuiltCli(["exec", "Inspect this workspace", "--json", "--cwd", workspace], homeDir);
+    const payload = JSON.parse(run.stdout) as {
+      status: string;
+      summary: string;
+    };
+
+    expect(run.exitCode).toBe(0);
+    expect(payload.status).toBe("completed");
+    expect(payload.summary).toContain("Inspected the workspace.");
   });
 
   it("returns a paused result with a resume command when approval is required", async () => {

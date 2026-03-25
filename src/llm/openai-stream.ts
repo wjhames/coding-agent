@@ -45,49 +45,60 @@ export async function readStreamingMessage(
   const decoder = new TextDecoder();
   let buffer = "";
   let content = "";
+  let semanticDone = false;
   const toolCalls = new Map<number, z.infer<typeof toolCallSchema>>();
 
-  while (true) {
-    const chunk = await reader.read();
-    if (chunk.done) {
-      break;
-    }
+  try {
+    while (!semanticDone) {
+      const chunk = await reader.read();
+      if (chunk.done) {
+        break;
+      }
 
-    buffer += decoder.decode(chunk.value, { stream: true });
-    let boundary = buffer.indexOf("\n\n");
+      buffer += decoder.decode(chunk.value, { stream: true });
+      let boundary = buffer.indexOf("\n\n");
 
-    while (boundary !== -1) {
-      const frame = buffer.slice(0, boundary);
-      buffer = buffer.slice(boundary + 2);
-      handleSseFrame(frame, {
-        onTextDelta,
-        onToolCallDelta(index, delta) {
-          const current =
-            toolCalls.get(index) ??
-            ({
-              id: delta.id ?? `tool-${index}`,
+      while (boundary !== -1) {
+        const frame = buffer.slice(0, boundary);
+        buffer = buffer.slice(boundary + 2);
+        semanticDone = handleSseFrame(frame, {
+          onTextDelta,
+          onToolCallDelta(index, delta) {
+            const current =
+              toolCalls.get(index) ??
+              ({
+                id: delta.id ?? `tool-${index}`,
+                type: "function",
+                function: {
+                  arguments: "",
+                  name: ""
+                }
+              } satisfies z.infer<typeof toolCallSchema>);
+
+            toolCalls.set(index, {
+              id: delta.id ?? current.id,
               type: "function",
               function: {
-                arguments: "",
-                name: ""
+                arguments: `${current.function.arguments}${delta.function?.arguments ?? ""}`,
+                name: delta.function?.name ?? current.function.name
               }
-            } satisfies z.infer<typeof toolCallSchema>);
-
-          toolCalls.set(index, {
-            id: delta.id ?? current.id,
-            type: "function",
-            function: {
-              arguments: `${current.function.arguments}${delta.function?.arguments ?? ""}`,
-              name: delta.function?.name ?? current.function.name
-            }
-          });
-        },
-        pushContent(delta) {
-          content += delta;
+            });
+          },
+          pushContent(delta) {
+            content += delta;
+          }
+        });
+        if (semanticDone) {
+          break;
         }
-      });
-      boundary = buffer.indexOf("\n\n");
+        boundary = buffer.indexOf("\n\n");
+      }
     }
+  } finally {
+    if (semanticDone) {
+      await reader.cancel().catch(() => undefined);
+    }
+    reader.releaseLock();
   }
 
   return {
@@ -118,7 +129,7 @@ function handleSseFrame(
     ) => void;
     pushContent: (delta: string) => void;
   }
-): void {
+): boolean {
   const dataLines = frame
     .split("\n")
     .filter((line) => line.startsWith("data:"))
@@ -127,7 +138,7 @@ function handleSseFrame(
 
   for (const line of dataLines) {
     if (line === "[DONE]") {
-      continue;
+      return true;
     }
 
     const payload = JSON.parse(line) as {
@@ -166,6 +177,8 @@ function handleSseFrame(
       }
     }
   }
+
+  return false;
 }
 
 function normalizeStreamingContent(

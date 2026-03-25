@@ -8,6 +8,12 @@ export interface MockResponse {
   status?: number;
 }
 
+export interface MockStreamingResponse {
+  chunks: string[];
+  keepOpen?: boolean;
+  status?: number;
+}
+
 export interface MockLlmRequest {
   body: unknown;
   headers: Headers;
@@ -110,6 +116,55 @@ export async function createRequestAwareMockLlmServer(args: {
   return {
     baseUrl: `http://127.0.0.1:${address.port}/v1`,
     requests
+  };
+}
+
+export async function createStreamingMockLlmServer(
+  responses: MockStreamingResponse[]
+): Promise<{ baseUrl: string }> {
+  const server = createServer(async (request, response) => {
+    if (
+      request.method !== "POST" ||
+      !(request.url === "/chat/completions" || request.url === "/v1/chat/completions")
+    ) {
+      response.writeHead(404).end();
+      return;
+    }
+
+    for await (const _chunk of request) {
+      // drain request body
+    }
+
+    const next = responses.shift();
+    if (!next) {
+      response.writeHead(500, { "content-type": "application/json" });
+      response.end(JSON.stringify({ error: "No mocked responses remaining." }));
+      return;
+    }
+
+    response.writeHead(next.status ?? 200, {
+      "content-type": "text/event-stream"
+    });
+
+    for (const chunk of next.chunks) {
+      response.write(chunk);
+    }
+
+    if (!next.keepOpen) {
+      response.end();
+    }
+  });
+
+  servers.add(server);
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+  const address = server.address();
+  if (!address || typeof address === "string") {
+    throw new Error("Mock server did not expose a TCP address.");
+  }
+
+  return {
+    baseUrl: `http://127.0.0.1:${address.port}/v1`
   };
 }
 

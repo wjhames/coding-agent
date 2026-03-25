@@ -63,6 +63,54 @@ describe("createOpenAICompatibleClient", () => {
     expect(deltas).toEqual(["Hello ", "world"]);
   });
 
+  it("treats [DONE] as terminal even when the provider keeps the stream open", async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(
+      new Response(
+        new ReadableStream({
+          start(controller) {
+            controller.enqueue(
+              new TextEncoder().encode(
+                "data: {\"choices\":[{\"delta\":{\"content\":\"done\"}}]}\n\n"
+              )
+            );
+            controller.enqueue(new TextEncoder().encode("data: [DONE]\n\n"));
+          }
+        }),
+        {
+          status: 200,
+          headers: {
+            "content-type": "text/event-stream"
+          }
+        }
+      )
+    );
+
+    const client = createOpenAICompatibleClient({
+      apiKey: "secret",
+      baseUrl: "http://localhost:1234/v1",
+      fetchImpl,
+      model: "gpt-4.1-mini"
+    });
+
+    await expect(
+      client.runTools({
+        messages: [
+          {
+            content: "system",
+            role: "system"
+          },
+          {
+            content: "user",
+            role: "user"
+          }
+        ],
+        tools: []
+      })
+    ).resolves.toEqual({
+      text: "done"
+    });
+  });
+
   it("sends a chat completion request and returns string content", async () => {
     const fetchImpl = vi.fn().mockResolvedValue(
       new Response(
