@@ -114,6 +114,70 @@ describe("adversarial runtime failures", () => {
     expect(payload.verification.status).toBe("passed");
   });
 
+  it("does not infer placeholder npm tests after creating a scaffolded package.json", async () => {
+    const workspace = await makeWorkspace();
+    const llm = await createMockLlmServer([
+      toolCallResponse("apply_patch", {
+        operations: [
+          {
+            content: JSON.stringify(
+              {
+                name: "scaffolded-app",
+                private: true,
+                scripts: {
+                  test: "echo \"Error: no test specified\" && exit 1"
+                }
+              },
+              null,
+              2
+            ),
+            path: "package.json",
+            type: "create"
+          },
+          {
+            content: "export default function Home() { return <main>Hello</main>; }\n",
+            path: "pages/index.js",
+            type: "create"
+          }
+        ]
+      }),
+      finalResponse("Implemented the requested scaffold.")
+    ]);
+    const homeDir = await makeHomeDir(llm.baseUrl, "auto");
+
+    const run = await runBuiltCli(
+      ["exec", "Create a small scaffolded web app", "--json", "--cwd", workspace],
+      homeDir
+    );
+    const payload = JSON.parse(run.stdout) as {
+      status: string;
+      summary: string;
+      verification: {
+        commands: string[];
+        ran: boolean;
+        status: string;
+      };
+    };
+
+    if (payload.status !== "completed" || payload.verification.commands.length > 0) {
+      await captureFailureArtifacts({
+        failure: {
+          details: JSON.stringify(payload, null, 2),
+          kind: "verification_stale"
+        },
+        files: {
+          "workspace.json": JSON.stringify(await snapshotWorkspace(workspace), null, 2)
+        },
+        summary: payload.summary
+      });
+    }
+
+    expect(payload.status).toBe("completed");
+    expect(payload.verification.commands).toEqual([]);
+    expect(payload.verification.ran).toBe(false);
+    expect(payload.verification.status).toBe("not_run");
+  });
+
   it("does not report completed when the assistant explicitly says work remains", async () => {
     const workspace = await makeWorkspace({
       files: {
@@ -267,7 +331,85 @@ describe("adversarial runtime failures", () => {
     expect(payload.status).not.toBe("completed");
   });
 
-  it("does not report completed when verification passes but the current plan still has pending work", async () => {
+  it("does not report completed when the current plan still has in-progress work after partial edits", async () => {
+    const workspace = await makeWorkspace();
+    const llm = await createMockLlmServer([
+      toolCallResponse("write_plan", {
+        items: [
+          {
+            content: "Create dashboard package",
+            status: "completed"
+          },
+          {
+            content: "Create App.jsx",
+            status: "in_progress"
+          }
+        ],
+        summary: "Build the dashboard."
+      }),
+      toolCallResponse("apply_patch", {
+        operations: [
+          {
+            content: "{\"name\":\"dashboard\",\"private\":true}\n",
+            path: "dashboard/package.json",
+            type: "create"
+          }
+        ]
+      }),
+      finalResponse("Implemented the requested dashboard.")
+    ]);
+    const homeDir = await makeHomeDir(llm.baseUrl, "auto");
+
+    const run = await runBuiltCli(
+      ["exec", "Create a dashboard with package.json and App.jsx", "--json", "--cwd", workspace],
+      homeDir
+    );
+    const payload = JSON.parse(run.stdout) as {
+      changedFiles: string[];
+      nextActions: string[];
+      plan: {
+        items: Array<{
+          content: string;
+          status: string;
+        }>;
+      } | null;
+      status: string;
+      summary: string;
+      verification: {
+        status: string;
+      };
+    };
+
+    if (payload.status === "completed") {
+      await captureFailureArtifacts({
+        failure: {
+          details: JSON.stringify(
+            {
+              changedFiles: payload.changedFiles,
+              nextActions: payload.nextActions,
+              plan: payload.plan,
+              verification: payload.verification
+            },
+            null,
+            2
+          ),
+          kind: "completion_false_positive"
+        },
+        files: {
+          "workspace.json": JSON.stringify(await snapshotWorkspace(workspace), null, 2)
+        },
+        summary: payload.summary
+      });
+    }
+
+    expect(payload.changedFiles).toContain("dashboard/package.json");
+    expect(payload.plan?.items.some((item) => item.status === "in_progress")).toBe(true);
+    expect(payload.nextActions).toContain("Create App.jsx");
+    expect(payload.verification.status).toBe("not_run");
+    expect(payload.status).not.toBe("completed");
+  });
+
+  it("does not fail completed work solely because stale plan items remain pending", async () => {
     const workspace = await makeWorkspace({
       packageScripts: {
         test: "node -e \"const { readFileSync } = require('node:fs'); process.exit(readFileSync('status.txt', 'utf8').trim() === 'ready' ? 0 : 1)\""
@@ -319,7 +461,7 @@ describe("adversarial runtime failures", () => {
       };
     };
 
-    if (payload.status === "completed") {
+    if (payload.status !== "completed") {
       await captureFailureArtifacts({
         failure: {
           details: JSON.stringify(
@@ -330,7 +472,7 @@ describe("adversarial runtime failures", () => {
             null,
             2
           ),
-          kind: "completion_false_positive"
+          kind: "completion_false_negative"
         },
         files: {
           "workspace.json": JSON.stringify(await snapshotWorkspace(workspace), null, 2)
@@ -339,10 +481,10 @@ describe("adversarial runtime failures", () => {
       });
     }
 
-    expect(payload.verification.ran).toBe(true);
-    expect(payload.verification.status).toBe("passed");
+    expect(payload.verification.ran).toBe(false);
+    expect(payload.verification.status).toBe("not_run");
     expect(payload.plan?.items.some((item) => item.status === "pending")).toBe(true);
-    expect(payload.status).not.toBe("completed");
+    expect(payload.status).toBe("completed");
   });
 
   it("does not report completed when required deliverables are still missing", async () => {

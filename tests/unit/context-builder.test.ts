@@ -34,7 +34,8 @@ describe("buildRequestContext", () => {
         guidanceFiles: [],
         isGitRepo: false,
         packageScripts: {},
-        topLevelEntries: []
+        topLevelEntries: [],
+        verificationSignals: []
       },
       systemPrompt: "system",
       turns: [
@@ -148,7 +149,8 @@ describe("buildRequestContext", () => {
         guidanceFiles: [],
         isGitRepo: false,
         packageScripts: {},
-        topLevelEntries: []
+        topLevelEntries: [],
+        verificationSignals: []
       },
       systemPrompt: "system",
       turns: [
@@ -240,7 +242,8 @@ describe("buildRequestContext", () => {
         guidanceFiles: [],
         isGitRepo: false,
         packageScripts: {},
-        topLevelEntries: ["spec.md"]
+        topLevelEntries: ["spec.md"],
+        verificationSignals: []
       },
       systemPrompt: "system",
       turns: [
@@ -409,5 +412,74 @@ describe("buildRequestContext", () => {
         tool_call_id: "call-3"
       }
     ]);
+  });
+
+  it("surfaces the active plan step and stale-plan warning in pinned state", async () => {
+    const cwd = await mkdtemp(join(os.tmpdir(), "coding-agent-context-builder-"));
+    tempDirs.push(cwd);
+
+    const result = await buildRequestContext({
+      changedFiles: ["dashboard/package.json"],
+      config: {
+        approvalPolicy: "auto"
+      },
+      cwd,
+      guidance: {
+        activeRules: [],
+        sources: []
+      },
+      observations: [],
+      pendingApprovalSummary: null,
+      plan: {
+        items: [
+          {
+            content: "Create dashboard package",
+            id: "plan-1",
+            status: "completed"
+          },
+          {
+            content: "Create App.jsx",
+            id: "plan-2",
+            status: "pending"
+          }
+        ],
+        summary: "Build the dashboard"
+      },
+      prompt: "continue",
+      repoContext: {
+        guidanceFiles: [],
+        isGitRepo: false,
+        packageScripts: {},
+        topLevelEntries: ["dashboard"],
+        verificationSignals: []
+      },
+      systemPrompt: "system",
+      turns: [
+        {
+          at: "2026-03-20T00:00:00.000Z",
+          id: "user-1",
+          kind: "user",
+          text: "continue"
+        }
+      ] as never,
+      verification: {
+        commands: [],
+        inferred: true,
+        notRunReason: "Verification has not run yet.",
+        passed: false,
+        ran: false,
+        runs: [],
+        selectedCommands: [],
+        skippedCommands: [],
+        status: "not_run"
+      },
+      verificationCommands: []
+    });
+
+    const systemMessage = result.messages[0]?.content ?? "";
+
+    expect(systemMessage).toContain("Plan: Build the dashboard");
+    expect(systemMessage).toContain("Current next action: Create App.jsx");
+    expect(systemMessage).toContain("Plan may be stale after recent changes.");
   });
 });

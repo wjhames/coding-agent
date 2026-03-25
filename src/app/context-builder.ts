@@ -181,8 +181,15 @@ function buildContextSections(args: {
   }
 
   const pinnedStateLines = [
+    args.plan ? `Plan: ${args.plan.summary}` : null,
     args.plan
-      ? `Plan: ${args.plan.summary} | ${args.plan.items.map((item) => `[${item.status}] ${item.content}`).join(" ; ")}`
+      ? `Plan items: ${args.plan.items.map((item) => `[${item.status}] ${item.content}`).join(" ; ")}`
+      : null,
+    args.plan
+      ? `Current next action: ${args.plan.items.find((item) => item.status !== "completed")?.content ?? "None."}`
+      : null,
+    args.plan && args.changedFiles.length > 0 && args.plan.items.some((item) => item.status !== "completed")
+      ? "Plan may be stale after recent changes. Refresh it before claiming completion."
       : null,
     args.pendingApprovalSummary ? `Pending approval: ${args.pendingApprovalSummary}` : null,
     args.changedFiles.length > 0 ? `Changed files: ${args.changedFiles.join(", ")}` : null,
@@ -217,6 +224,11 @@ function buildContextSections(args: {
       Object.keys(args.repoContext.packageScripts).length > 0
         ? `Package scripts: ${Object.keys(args.repoContext.packageScripts).join(", ")}.`
         : "No package scripts detected.",
+      args.repoContext.verificationSignals.length > 0
+        ? `Detected verification sources: ${args.repoContext.verificationSignals
+            .map((signal) => `${signal.command} (${signal.source})`)
+            .join(", ")}.`
+        : "No repo-native verification sources detected.",
       args.verificationCommands.length > 0
         ? `Likely verification commands: ${args.verificationCommands.join(", ")}.`
         : "No verification commands inferred."

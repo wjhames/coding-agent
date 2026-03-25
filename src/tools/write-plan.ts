@@ -22,7 +22,8 @@ export function createWritePlanTool(args: {
   setPlan: (plan: PlanState) => void;
 }): LlmTool {
   return {
-    description: "Create or replace the current execution plan for this task.",
+    description:
+      "Create or replace the current execution plan for this task. Use it before multi-step work and update it when item status changes.",
     inputSchema: planInputSchema,
     inputJsonSchema: {
       type: "object",
