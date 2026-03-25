@@ -257,12 +257,17 @@ export function buildFinalSummary(
   if (details.verification.status === "passed") {
     lines.push(`Verification passed: ${details.verification.runs.map((run) => run.command).join(", ")}`);
   } else if (details.verification.status === "failed") {
+    const failingRun = details.verification.runs.find((run) => !run.passed);
+    const excerpt = firstNonEmptyLine(failingRun?.stderr) ?? firstNonEmptyLine(failingRun?.stdout);
     lines.push(
       `Verification failed: ${details.verification.runs
         .filter((run) => !run.passed)
         .map((run) => run.command)
         .join(", ")}`
     );
+    if (excerpt) {
+      lines.push(`Verification output: ${excerpt}`);
+    }
   } else if (details.verification.notRunReason) {
     lines.push(`Verification not run: ${details.verification.notRunReason}`);
   }
@@ -276,6 +281,21 @@ export function buildFinalSummary(
   }
 
   return lines.join("\n\n");
+}
+
+function firstNonEmptyLine(text: string | undefined): string | null {
+  if (!text) {
+    return null;
+  }
+
+  for (const line of text.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (trimmed.length > 0) {
+      return trimmed;
+    }
+  }
+
+  return null;
 }
 
 function createTurnId(prefix: string): string {

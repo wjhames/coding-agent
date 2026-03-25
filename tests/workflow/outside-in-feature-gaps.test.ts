@@ -127,7 +127,7 @@ describe("outside-in feature gaps", () => {
         "status.txt": "ready\n"
       },
       packageScripts: {
-        test: "node -e \"const { readFileSync } = require('node:fs'); process.exit(readFileSync('status.txt', 'utf8').trim() === 'ready' ? 0 : 1)\""
+        test: "node -e \"const { readFileSync } = require('node:fs'); const ok = readFileSync('status.txt', 'utf8').trim() === 'ready'; if (!ok) console.error('expected ready'); process.exit(ok ? 0 : 1)\""
       }
     });
     const llm = await createMockLlmServer([
@@ -163,6 +163,46 @@ describe("outside-in feature gaps", () => {
     expect(payload.status).toBe("failed");
     expect(payload.verification.status).toBe("failed");
     expect(payload.verification.runs.filter((runItem) => runItem.command === "npm test")).toHaveLength(2);
+  });
+
+  it("includes the first failing verification excerpt in the final summary", async () => {
+    const workspace = await makeWorkspace({
+      files: {
+        "status.txt": "broken\n"
+      },
+      packageScripts: {
+        test: "node -e \"console.error('expected ready'); process.exit(1)\""
+      }
+    });
+    const llm = await createMockLlmServer([
+      finalResponse("Checked the workspace."),
+      finalResponse("I could not repair the failing verification.")
+    ]);
+    const homeDir = await makeHomeDir(llm.baseUrl, "auto");
+
+    const run = await runBuiltCli(
+      [
+        "exec",
+        "Inspect the workspace and verify it",
+        "--json",
+        "--cwd",
+        workspace,
+        "--max-steps",
+        "1"
+      ],
+      homeDir
+    );
+    const payload = JSON.parse(run.stdout) as {
+      status: string;
+      summary: string;
+      verification: {
+        status: string;
+      };
+    };
+
+    expect(payload.status).toBe("failed");
+    expect(payload.verification.status).toBe("failed");
+    expect(payload.summary).toContain("Verification output: expected ready");
   });
 
   it("blocks shell commands that write outside the workspace even when they do not use redirection", async () => {
