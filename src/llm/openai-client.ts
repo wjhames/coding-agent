@@ -56,7 +56,7 @@ export function createOpenAICompatibleClient(
     },
 
     async runTools(request: ToolLoopRequest): Promise<ToolLoopResult> {
-      const messages: OpenAICompatibleMessage[] = [...request.messages];
+      let messages: OpenAICompatibleMessage[] = [...request.messages];
       const maxRounds = request.maxRounds ?? DEFAULT_MAX_TOOL_ROUNDS;
 
       for (let round = 0; round < maxRounds; round += 1) {
@@ -101,13 +101,18 @@ export function createOpenAICompatibleClient(
             content: toolResult
           });
         }
+
+        if (request.refreshMessages) {
+          messages = [...(await request.refreshMessages())];
+        }
       }
 
+      const finalMessages = request.refreshMessages ? await request.refreshMessages() : messages;
       const finalResponse = await sendStreamingRequest({
         config,
         fetchImpl,
         messages: [
-          ...messages,
+          ...finalMessages,
           {
             role: "user",
             content: FINALIZE_TOOL_LOOP_PROMPT

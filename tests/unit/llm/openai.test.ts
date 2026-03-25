@@ -486,6 +486,133 @@ describe("createOpenAICompatibleClient", () => {
     );
   });
 
+  it("refreshes messages between tool rounds when requested", async () => {
+    const fetchImpl = vi
+      .fn()
+      .mockImplementationOnce(async () =>
+        new Response(
+          JSON.stringify({
+            choices: [
+              {
+                message: {
+                  content: null,
+                  tool_calls: [
+                    {
+                      id: "call-1",
+                      type: "function",
+                      function: {
+                        name: "write_plan",
+                        arguments: JSON.stringify({
+                          summary: "Plan summary",
+                          items: [
+                            {
+                              content: "Create App.jsx",
+                              status: "pending"
+                            }
+                          ]
+                        })
+                      }
+                    }
+                  ]
+                }
+              }
+            ]
+          }),
+          {
+            status: 200,
+            headers: {
+              "content-type": "application/json"
+            }
+          }
+        )
+      )
+      .mockImplementationOnce(async (_url, init) => {
+        const body =
+          typeof init?.body === "string"
+            ? (JSON.parse(init.body) as {
+                messages?: Array<{ content?: string; role?: string }>;
+              })
+            : {};
+
+        expect(body.messages?.[0]?.role).toBe("system");
+        expect(body.messages?.[0]?.content).toBe("refreshed system");
+
+        return new Response(
+          JSON.stringify({
+            choices: [
+              {
+                message: {
+                  content: "Done."
+                }
+              }
+            ]
+          }),
+          {
+            status: 200,
+            headers: {
+              "content-type": "application/json"
+            }
+          }
+        );
+      });
+
+    const client = createOpenAICompatibleClient({
+      apiKey: "secret",
+      baseUrl: "http://localhost:1234/v1",
+      fetchImpl,
+      model: "gpt-4.1-mini"
+    });
+    const refreshMessages = vi.fn().mockResolvedValue([
+      {
+        content: "refreshed system",
+        role: "system" as const
+      },
+      {
+        content: "user",
+        role: "user" as const
+      }
+    ]);
+
+    await expect(
+      client.runTools({
+        messages: [
+          {
+            content: "initial system",
+            role: "system"
+          },
+          {
+            content: "user",
+            role: "user"
+          }
+        ],
+        refreshMessages,
+        tools: [
+          {
+            description: "Write the plan.",
+            inputJsonSchema: {
+              type: "object"
+            },
+            inputSchema: z.object({
+              items: z.array(
+                z.object({
+                  content: z.string(),
+                  status: z.string()
+                })
+              ),
+              summary: z.string()
+            }),
+            name: "write_plan",
+            run: vi.fn().mockResolvedValue("{\"ok\":true}")
+          }
+        ]
+      })
+    ).resolves.toEqual({
+      text: "Done."
+    });
+
+    expect(refreshMessages).toHaveBeenCalledTimes(1);
+  });
+
   it("forces a final answer after hitting the tool round cap", async () => {
     const fetchImpl = vi
       .fn()

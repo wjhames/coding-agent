@@ -47,30 +47,36 @@ export async function runModelLoop(args: {
     state: args.state,
     verificationCommands: args.verificationCommands
   });
-  const requestContext = await buildRequestContext({
-    changedFiles: changedFilesList(args.state),
-    config: args.config,
-    cwd: args.cwd,
-    guidance: args.guidance.summary,
-    observations: args.state.observations,
-    pendingApprovalSummary: args.state.pendingAction?.approval.summary ?? null,
-    plan: args.state.plan,
-    prompt: args.prompt,
-    repoContext: args.repoContext,
-    systemPrompt: buildSystemPrompt({
+  const rebuildRequestContext = async () => {
+    const requestContext = await buildRequestContext({
+      changedFiles: changedFilesList(args.state),
       config: args.config,
-      readOnlyTask: args.readOnlyTask
-    }),
-    turns: args.state.turns,
-    verification: args.state.verification,
-    verificationCommands: args.verificationCommands
-  });
-  setContextSnapshot(args.state, requestContext.context);
-  emitRuntimeEvent(args.observer, {
-    at: new Date().toISOString(),
-    context: requestContext.context,
-    type: "context_updated"
-  });
+      cwd: args.cwd,
+      guidance: args.guidance.summary,
+      observations: args.state.observations,
+      pendingApprovalSummary: args.state.pendingAction?.approval.summary ?? null,
+      plan: args.state.plan,
+      prompt: args.prompt,
+      repoContext: args.repoContext,
+      systemPrompt: buildSystemPrompt({
+        config: args.config,
+        readOnlyTask: args.readOnlyTask
+      }),
+      turns: args.state.turns,
+      verification: args.state.verification,
+      verificationCommands: args.verificationCommands
+    });
+
+    setContextSnapshot(args.state, requestContext.context);
+    emitRuntimeEvent(args.observer, {
+      at: new Date().toISOString(),
+      context: requestContext.context,
+      type: "context_updated"
+    });
+
+    return requestContext;
+  };
+  const requestContext = await rebuildRequestContext();
   const toolResult = await args.client.runTools({
     maxRounds: args.config.maxSteps ?? 8,
     messages: requestContext.messages,
@@ -81,6 +87,7 @@ export async function runModelLoop(args: {
         type: "assistant_delta"
       });
     },
+    refreshMessages: async () => (await rebuildRequestContext()).messages,
     tools
   });
 

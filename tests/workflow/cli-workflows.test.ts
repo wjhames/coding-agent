@@ -235,6 +235,65 @@ describe("black-box cli workflows", () => {
   );
 
   it(
+    "refreshes the active plan step in the next provider request after write_plan",
+    async () => {
+      const workspace = await makeWorkspace();
+      const llm = await createRequestAwareMockLlmServer({
+        onRequest(request, requestIndex) {
+          if (requestIndex === 0) {
+            return toolCallResponse("write_plan", {
+              items: [
+                {
+                  content: "Create dashboard package",
+                  status: "completed"
+                },
+                {
+                  content: "Create App.jsx",
+                  status: "pending"
+                }
+              ],
+              summary: "Build the dashboard."
+            });
+          }
+
+          return finalResponse("Dashboard planning is still in progress.");
+        }
+      });
+      const homeDir = await makeHomeDir(llm.baseUrl, "auto");
+
+      const run = await runBuiltCli(
+        ["exec", "Build a dashboard with package.json and App.jsx", "--json", "--cwd", workspace],
+        homeDir
+      );
+
+      expect(run.exitCode).toBe(1);
+      const secondRequest =
+        llm.requests[1]?.body && typeof llm.requests[1].body === "object"
+          ? (llm.requests[1].body as { messages?: Array<{ content?: string; role?: string }> })
+          : null;
+      const systemMessage =
+        secondRequest?.messages?.find((message) => message.role === "system")?.content ?? "";
+
+      if (
+        !systemMessage.includes("Plan: Build the dashboard.") ||
+        !systemMessage.includes("Current next action: Create App.jsx")
+      ) {
+        await captureFailureArtifacts({
+          failure: {
+            details: systemMessage,
+            kind: "completion_false_positive"
+          },
+          summary: "expected updated plan state in the next provider request"
+        });
+      }
+
+      expect(systemMessage).toContain("Plan: Build the dashboard.");
+      expect(systemMessage).toContain("Current next action: Create App.jsx");
+    },
+    20_000
+  );
+
+  it(
     "keeps replay history pair-aligned when approval resume follows multiple prior tool exchanges",
     async () => {
       const workspace = await makeWorkspace();

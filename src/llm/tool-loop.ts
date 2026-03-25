@@ -20,6 +20,7 @@ export interface ToolLoopRequest {
   maxRounds?: number;
   messages: OpenAICompatibleMessage[];
   onTextDelta?: ((delta: string) => void) | undefined;
+  refreshMessages?: (() => Promise<OpenAICompatibleMessage[]> | OpenAICompatibleMessage[]) | undefined;
   tools: LlmTool[];
 }
 
