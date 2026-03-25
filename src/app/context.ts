@@ -15,9 +15,27 @@ export interface RepoContext extends RepoContextSummary {
     content: string;
     path: string;
   }>;
+  verificationSignals: VerificationSignal[];
+}
+
+export interface VerificationSignal {
+  command: string;
+  defaultSelected: boolean;
+  ecosystem: "go" | "gradle" | "maven" | "npm" | "python" | "rust";
+  kind: "build" | "check" | "lint" | "test" | "typecheck";
+  source: string;
 }
 
 const GUIDANCE_FILES = ["AGENTS.md", "CLAUDE.md", "README.md", "package.json"] as const;
+const VERIFICATION_SIGNAL_FILES = [
+  "Cargo.toml",
+  "build.gradle",
+  "build.gradle.kts",
+  "go.mod",
+  "package.json",
+  "pom.xml",
+  "pyproject.toml"
+] as const;
 const MAX_SNIPPET_BYTES = 4096;
 const MAX_TOP_LEVEL_ENTRIES = 12;
 const MAX_RETRIEVAL_FILES = 300;
@@ -73,6 +91,18 @@ export async function collectRepoContext(cwd: string): Promise<RepoContext> {
       snippet !== null
   );
   const isGitRepo = await hasPath(join(cwd, ".git"));
+  const verificationFiles = new Map<string, string>();
+
+  await Promise.all(
+    VERIFICATION_SIGNAL_FILES.filter((name) => entries.includes(name)).map(async (name) => {
+      const content =
+        snippets.find((snippet) => snippet.path === name)?.content ?? (await readSnippet(join(cwd, name)));
+
+      if (content !== null) {
+        verificationFiles.set(name, content);
+      }
+    })
+  );
 
   return {
     guidanceFiles,
@@ -81,7 +111,11 @@ export async function collectRepoContext(cwd: string): Promise<RepoContext> {
       snippets.find((snippet) => snippet.path === "package.json")?.content
     ),
     snippets,
-    topLevelEntries
+    topLevelEntries,
+    verificationSignals: extractVerificationSignals({
+      entries,
+      files: verificationFiles
+    })
   };
 }
 
@@ -103,6 +137,10 @@ export function deriveWorkingSet(args: {
   ]);
 
   for (const path of args.changedFiles) {
+    if (isLowSignalContextPath(path)) {
+      continue;
+    }
+
     upsertWorkingSet(scores, {
       path,
       pinned: true,
@@ -137,6 +175,10 @@ export function deriveWorkingSet(args: {
 
     if (observation.tool === "search_files") {
       for (const match of parseMatchPaths(observation.excerpt)) {
+        if (isLowSignalContextPath(match)) {
+          continue;
+        }
+
         upsertWorkingSet(scores, {
           path: match,
           pinned: false,
@@ -245,6 +287,10 @@ function rankWorkspaceFiles(args: {
   }
 
   for (const file of args.files) {
+    if (isLowSignalContextPath(file) && !byPath.has(file)) {
+      continue;
+    }
+
     const current = byPath.get(file) ?? {
       path: file,
       reason: "Lexical retrieval candidate.",
@@ -364,6 +410,27 @@ function tokenizePath(path: string): string[] {
     .filter((token) => token.length > 0);
 }
 
+function isLowSignalContextPath(path: string): boolean {
+  const normalized = path.toLowerCase();
+
+  if (
+    normalized.includes("/.next/") ||
+    normalized.startsWith(".next/") ||
+    normalized.includes("/node_modules/") ||
+    normalized.startsWith("node_modules/") ||
+    normalized.includes("/coverage/") ||
+    normalized.startsWith("coverage/") ||
+    normalized.includes("/dist/") ||
+    normalized.startsWith("dist/") ||
+    normalized.includes("/build/") ||
+    normalized.startsWith("build/")
+  ) {
+    return true;
+  }
+
+  return /\.(?:avif|bmp|gif|ico|jpe?g|pdf|png|tar|webp|zip)$/i.test(normalized);
+}
+
 function scorePathTokens(pathTokens: string[], queryTokens: string[]): number {
   let score = 0;
 
@@ -431,6 +498,155 @@ function extractPackageScripts(contents: string | undefined): Record<string, str
   } catch {
     return {};
   }
+}
+
+function extractVerificationSignals(args: {
+  entries: string[];
+  files: Map<string, string>;
+}): VerificationSignal[] {
+  const signals: VerificationSignal[] = [];
+  const packageScripts = extractPackageScripts(args.files.get("package.json"));
+
+  for (const [script, command] of Object.entries(packageScripts)) {
+    if (script === "lint") {
+      signals.push({
+        command: "npm run lint",
+        defaultSelected: true,
+        ecosystem: "npm",
+        kind: "lint",
+        source: "package.json"
+      });
+      continue;
+    }
+
+    if (script === "typecheck") {
+      signals.push({
+        command: "npm run typecheck",
+        defaultSelected: true,
+        ecosystem: "npm",
+        kind: "typecheck",
+        source: "package.json"
+      });
+      continue;
+    }
+
+    if (script === "build") {
+      signals.push({
+        command: "npm run build",
+        defaultSelected: false,
+        ecosystem: "npm",
+        kind: "build",
+        source: "package.json"
+      });
+      continue;
+    }
+
+    if (script === "test" && !isPlaceholderNodeTestScript(command)) {
+      signals.push({
+        command: "npm test",
+        defaultSelected: true,
+        ecosystem: "npm",
+        kind: "test",
+        source: "package.json"
+      });
+      continue;
+    }
+
+    if (script === "check") {
+      signals.push({
+        command: "npm run check",
+        defaultSelected: true,
+        ecosystem: "npm",
+        kind: "check",
+        source: "package.json"
+      });
+    }
+  }
+
+  const pyproject = args.files.get("pyproject.toml") ?? "";
+  if (/\bpytest\b/i.test(pyproject)) {
+    signals.push({
+      command: "pytest",
+      defaultSelected: true,
+      ecosystem: "python",
+      kind: "test",
+      source: "pyproject.toml"
+    });
+  }
+  if (/\bruff\b/i.test(pyproject)) {
+    signals.push({
+      command: "ruff check .",
+      defaultSelected: true,
+      ecosystem: "python",
+      kind: "lint",
+      source: "pyproject.toml"
+    });
+  }
+  if (/\bmypy\b/i.test(pyproject)) {
+    signals.push({
+      command: "mypy .",
+      defaultSelected: true,
+      ecosystem: "python",
+      kind: "typecheck",
+      source: "pyproject.toml"
+    });
+  }
+
+  if (args.files.has("Cargo.toml")) {
+    signals.push({
+      command: "cargo test",
+      defaultSelected: true,
+      ecosystem: "rust",
+      kind: "test",
+      source: "Cargo.toml"
+    });
+  }
+
+  if (args.files.has("go.mod")) {
+    signals.push({
+      command: "go test ./...",
+      defaultSelected: true,
+      ecosystem: "go",
+      kind: "test",
+      source: "go.mod"
+    });
+  }
+
+  if (args.files.has("pom.xml")) {
+    signals.push({
+      command: args.entries.includes("mvnw") ? "./mvnw test" : "mvn test",
+      defaultSelected: true,
+      ecosystem: "maven",
+      kind: "test",
+      source: "pom.xml"
+    });
+  }
+
+  if (args.files.has("build.gradle") || args.files.has("build.gradle.kts")) {
+    signals.push({
+      command: args.entries.includes("gradlew") ? "./gradlew test" : "gradle test",
+      defaultSelected: true,
+      ecosystem: "gradle",
+      kind: "test",
+      source: args.files.has("build.gradle.kts") ? "build.gradle.kts" : "build.gradle"
+    });
+  }
+
+  return dedupeVerificationSignals(signals);
+}
+
+function dedupeVerificationSignals(signals: VerificationSignal[]): VerificationSignal[] {
+  const unique = new Map<string, VerificationSignal>();
+
+  for (const signal of signals) {
+    unique.set(signal.command, signal);
+  }
+
+  return [...unique.values()];
+}
+
+function isPlaceholderNodeTestScript(command: string): boolean {
+  return /\berror:\s*no test specified\b/i.test(command);
 }
 
 async function hasPath(path: string): Promise<boolean> {

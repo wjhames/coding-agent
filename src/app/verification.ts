@@ -1,4 +1,5 @@
 import { normalizeShellCommand } from "./approval.js";
+import type { RepoContext, VerificationSignal } from "./context.js";
 import {
   isReadOnlyShellSegment,
   normalizeShellSegmentForComparison,
@@ -15,74 +16,69 @@ export interface VerificationPlan {
   }>;
 }
 
-const VERIFICATION_ORDER = [
-  {
-    command: "npm run lint",
-    defaultSelected: true,
-    detect: /\blint\b|npm run lint/,
-    script: "lint"
-  },
-  {
-    command: "npm run typecheck",
-    defaultSelected: true,
-    detect: /\btype-?check\b|\btsc\b|npm run typecheck/,
-    script: "typecheck"
-  },
-  {
-    command: "npm run build",
-    defaultSelected: false,
-    detect: /\bbuild\b|npm run build/,
-    script: "build"
-  },
-  {
-    command: "npm test",
-    defaultSelected: true,
-    detect: /\btests?\b|npm test/,
-    script: "test"
-  },
-  {
-    command: "npm run check",
-    defaultSelected: true,
-    detect: /\bchecks?\b|npm run check/,
-    script: "check"
-  }
-] as const;
+interface VerificationIntent {
+  generic: boolean;
+  kinds: Set<VerificationSignal["kind"]>;
+}
+
+const PROMPT_KIND_PATTERNS: Record<VerificationSignal["kind"], RegExp> = {
+  build: /\brun (?:the )?build\b|npm run build/,
+  check: /\brun (?:the )?checks?\b|npm run check/,
+  lint: /\brun (?:the )?lint(?:ing)?\b|\brun ruff\b|\bruff check\b|npm run lint/,
+  test: /\b(?:run|execute|verify)\b[^.\n]{0,40}\btests?\b|\bpytest\b|\bcargo test\b|\bgo test\b|\bmvn(?:w)? test\b|\bgradle(?:w)? test\b|npm test/,
+  typecheck: /\brun (?:the )?type-?check\b|\btsc\b|\bmypy\b|npm run typecheck/
+};
+
+const SUMMARY_KIND_PATTERNS: Record<VerificationSignal["kind"], RegExp> = {
+  build: /\b(?:ran|running|run|passed|failed)\b[^.\n]{0,40}\bbuild\b|npm run build/,
+  check: /\b(?:ran|running|run|passed|failed)\b[^.\n]{0,40}\bchecks?\b|npm run check/,
+  lint: /\b(?:ran|running|run|passed|failed)\b[^.\n]{0,40}\blint(?:ing)?\b|\bruff\b|npm run lint/,
+  test: /\b(?:ran|running|run|passed|failed|verified)\b[^.\n]{0,40}\btests?\b|\bpytest\b|\bcargo test\b|\bgo test\b|\bmvn(?:w)? test\b|\bgradle(?:w)? test\b|npm test/,
+  typecheck: /\b(?:ran|running|run|passed|failed)\b[^.\n]{0,40}\btype-?check\b|\btsc\b|\bmypy\b|npm run typecheck/
+};
 
 export function planVerificationCommands(args: {
   assistantSummary?: string;
   changedFiles: string[];
-  packageScripts: Record<string, string>;
   prompt: string;
+  repoContext: Pick<RepoContext, "packageScripts" | "topLevelEntries" | "verificationSignals">;
 }): VerificationPlan {
   const selectedCommands = new Set<string>();
   const skippedCommands = new Map<string, string>();
   const changedFilesMade = args.changedFiles.length > 0;
   const promptIntent = detectVerificationIntent(args.prompt);
   const summaryIntent = detectAssistantVerificationIntent(args.assistantSummary ?? "");
-  const requestedScripts = new Set<string>([
-    ...promptIntent.scripts,
-    ...summaryIntent.scripts
-  ]);
   const useDefaultVerification =
     changedFilesMade ||
     promptIntent.generic ||
     summaryIntent.generic;
 
-  for (const candidate of VERIFICATION_ORDER) {
-    const explicitlyRequested = requestedScripts.has(candidate.script);
+  for (const signal of args.repoContext.verificationSignals) {
+    const relevant = isVerificationSignalRelevant({
+      changedFiles: args.changedFiles,
+      prompt: args.prompt,
+      signal,
+      topLevelEntries: args.repoContext.topLevelEntries
+    });
+    const explicitlyRequested = signalMatchesIntent(signal, promptIntent);
+    const requestedBySummary = signalMatchesIntent(signal, summaryIntent);
     const shouldSelect =
-      explicitlyRequested || (useDefaultVerification && candidate.defaultSelected);
+      explicitlyRequested ||
+      (relevant && requestedBySummary) ||
+      (relevant && useDefaultVerification && signal.defaultSelected);
 
     if (!shouldSelect) {
       continue;
     }
 
-    if (candidate.script in args.packageScripts) {
-      selectedCommands.add(candidate.command);
-      continue;
-    }
+    selectedCommands.add(signal.command);
+  }
 
-    skippedCommands.set(candidate.command, `Script \`${candidate.script}\` is not defined.`);
+  if (promptIntent.generic && selectedCommands.size === 0) {
+    skippedCommands.set(
+      "verification",
+      "No trustworthy repo-native verification commands were detected."
+    );
   }
 
   return {
@@ -98,8 +94,8 @@ export function planVerificationCommands(args: {
 export function inferVerificationCommands(args: {
   assistantSummary?: string;
   changedFiles: string[];
-  packageScripts: Record<string, string>;
   prompt: string;
+  repoContext: Pick<RepoContext, "packageScripts" | "topLevelEntries" | "verificationSignals">;
 }): string[] {
   return planVerificationCommands(args).selectedCommands;
 }
@@ -179,28 +175,28 @@ export function summarizeVerificationEvidence(args: {
   };
 }
 
-function detectVerificationIntent(text: string): {
-  generic: boolean;
-  scripts: string[];
-} {
+function detectVerificationIntent(text: string): VerificationIntent {
   const normalized = text.toLowerCase();
-  const scripts = VERIFICATION_ORDER.filter((candidate) => candidate.detect.test(normalized)).map(
-    (candidate) => candidate.script
-  );
+  const kinds = new Set<VerificationSignal["kind"]>();
+
+  for (const [kind, pattern] of Object.entries(PROMPT_KIND_PATTERNS) as Array<
+    [VerificationSignal["kind"], RegExp]
+  >) {
+    if (pattern.test(normalized)) {
+      kinds.add(kind);
+    }
+  }
 
   return {
     generic:
       /\bverify\b|\bverification\b|\bvalidate\b|\bvalidated\b|\brun the checks\b/.test(
         normalized
       ),
-    scripts
+    kinds
   };
 }
 
-function detectAssistantVerificationIntent(text: string): {
-  generic: boolean;
-  scripts: string[];
-} {
+function detectAssistantVerificationIntent(text: string): VerificationIntent {
   const normalized = text.toLowerCase();
   const mentionsVerification =
     /\b(?:verify|verified|verification|validate|validated|passed|failed|running|ran|run)\b/.test(
@@ -210,11 +206,106 @@ function detectAssistantVerificationIntent(text: string): {
   if (!mentionsVerification) {
     return {
       generic: false,
-      scripts: []
+      kinds: new Set()
     };
   }
 
-  return detectVerificationIntent(text);
+  const kinds = new Set<VerificationSignal["kind"]>();
+
+  for (const [kind, pattern] of Object.entries(SUMMARY_KIND_PATTERNS) as Array<
+    [VerificationSignal["kind"], RegExp]
+  >) {
+    if (pattern.test(normalized)) {
+      kinds.add(kind);
+    }
+  }
+
+  return {
+    generic:
+      /\bverify\b|\bverification\b|\bvalidate\b|\bvalidated\b|\brun the checks\b/.test(
+        normalized
+      ),
+    kinds
+  };
+}
+
+function signalMatchesIntent(
+  signal: VerificationSignal,
+  intent: VerificationIntent
+): boolean {
+  return intent.kinds.has(signal.kind) || (intent.generic && signal.defaultSelected);
+}
+
+function isVerificationSignalRelevant(args: {
+  changedFiles: string[];
+  prompt: string;
+  signal: VerificationSignal;
+  topLevelEntries: string[];
+}): boolean {
+  if (args.changedFiles.length === 0) {
+    return true;
+  }
+
+  if (args.changedFiles.some((path) => pathMatchesSignal(path, args.signal))) {
+    return true;
+  }
+
+  const prompt = args.prompt.toLowerCase();
+
+  if (args.signal.ecosystem === "npm") {
+    return /\b(?:javascript|typescript|node|react|next\.js|nextjs|npm)\b/.test(prompt);
+  }
+
+  if (args.signal.ecosystem === "python") {
+    return /\bpython\b|\bpytest\b|\bruff\b|\bmypy\b/.test(prompt);
+  }
+
+  if (args.signal.ecosystem === "rust") {
+    return /\brust\b|\bcargo\b/.test(prompt);
+  }
+
+  if (args.signal.ecosystem === "go") {
+    return /\bgolang\b|\bgo\b/.test(prompt);
+  }
+
+  if (args.signal.ecosystem === "maven" || args.signal.ecosystem === "gradle") {
+    return /\bjava\b|\bkotlin\b|\bmaven\b|\bgradle\b/.test(prompt);
+  }
+
+  return args.topLevelEntries.includes(args.signal.source);
+}
+
+function pathMatchesSignal(path: string, signal: VerificationSignal): boolean {
+  const normalizedPath = path.toLowerCase();
+
+  if (normalizedPath === signal.source.toLowerCase()) {
+    return true;
+  }
+
+  switch (signal.ecosystem) {
+    case "npm":
+      return (
+        /\.(?:[cm]?jsx?|tsx?)$/.test(normalizedPath) ||
+        normalizedPath === "package-lock.json" ||
+        normalizedPath === "pnpm-lock.yaml" ||
+        normalizedPath === "yarn.lock" ||
+        normalizedPath.startsWith("pages/") ||
+        normalizedPath.startsWith("src/")
+      );
+    case "python":
+      return /\.py$/.test(normalizedPath) || normalizedPath.startsWith("tests/");
+    case "rust":
+      return /\.rs$/.test(normalizedPath) || normalizedPath.startsWith("src/");
+    case "go":
+      return /\.go$/.test(normalizedPath);
+    case "maven":
+    case "gradle":
+      return (
+        /\.(?:java|kt|kts)$/.test(normalizedPath) ||
+        normalizedPath.startsWith("src/main/") ||
+        normalizedPath.startsWith("src/test/")
+      );
+  }
 }
 
 function normalizeVerificationComparableCommand(command: string): string | null {

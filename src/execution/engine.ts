@@ -291,8 +291,8 @@ async function executeTask(args: {
   let verificationPlan = planVerificationCommands({
     assistantSummary: "",
     changedFiles: changedFilesList(state),
-    packageScripts: repoContext.packageScripts,
-    prompt: args.prompt
+    prompt: args.prompt,
+    repoContext
   });
   let verificationCommands = verificationPlan.selectedCommands;
   state.guidance = guidance.summary;
@@ -366,8 +366,8 @@ async function executeTask(args: {
     verificationPlan = planVerificationCommands({
       assistantSummary: summary,
       changedFiles: changedFilesList(state),
-      packageScripts: repoContext.packageScripts,
-      prompt: args.prompt
+      prompt: args.prompt,
+      repoContext
     });
     verificationCommands = verificationPlan.selectedCommands;
     state.verification = {
@@ -398,7 +398,10 @@ async function executeTask(args: {
     const completionFailureReason =
       findCompletionFailureReason(sanitizedSummary) ??
       findLatestToolFailureReason(state.turns) ??
-      findPlanFailureReason(state) ??
+      findPlanFailureReason({
+        state,
+        summary: sanitizedSummary
+      }) ??
       (await findMissingDeliverableReason({
         cwd: args.cwd,
         prompt: args.prompt
@@ -764,12 +767,37 @@ async function persistSession(args: {
   return createSession(args.input, args.sessionHomeDir);
 }
 
-function findPlanFailureReason(state: ExecutionState): string | null {
-  if (state.plan?.items.some((item) => item.status !== "completed")) {
+function findPlanFailureReason(args: {
+  state: ExecutionState;
+  summary: string;
+}): string | null {
+  const hasPendingPlanItems = args.state.plan?.items.some((item) => item.status !== "completed") ?? false;
+  const hasInProgressPlanItems =
+    args.state.plan?.items.some((item) => item.status === "in_progress") ?? false;
+  const hasDeliverableSignals =
+    args.state.changedFiles.size > 0 || args.state.verification.status === "passed";
+
+  if (hasPendingPlanItems && !hasDeliverableSignals) {
+    return "Plan still has unfinished work.";
+  }
+
+  if (
+    hasInProgressPlanItems &&
+    args.state.verification.status !== "passed" &&
+    assistantClaimsCompletion(args.summary)
+  ) {
     return "Plan still has unfinished work.";
   }
 
   return null;
+}
+
+function assistantClaimsCompletion(summary: string): boolean {
+  const normalized = summary.toLowerCase();
+
+  return /\b(?:completed|finished|implemented|created|updated|added|ready|successfully)\b/.test(
+    normalized
+  );
 }
 
 async function findMissingDeliverableReason(args: {
