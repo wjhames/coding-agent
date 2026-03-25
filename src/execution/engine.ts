@@ -309,6 +309,28 @@ async function executeTask(args: {
     recordUserTurn(state, args.prompt);
   }
 
+  let session = args.existingSession;
+
+  if (args.observer === undefined) {
+    session = await persistSession({
+      existingSession: session,
+      input: {
+        config: resolvedConfig,
+        context: state.context,
+        cwd: args.cwd,
+        guidance: state.guidance,
+        mode: "exec",
+        prompt: args.sessionPrompt,
+        repoContext: repoContextSummary,
+        state: toExecutionSnapshot(state),
+        status: "running",
+        summary: "Run in progress.",
+        turns: state.turns
+      },
+      sessionHomeDir: args.sessionHomeDir
+    });
+  }
+
   const client = createOpenAICompatibleClient({
     apiKey: llmConfig.apiKey,
     baseUrl: llmConfig.baseUrl,
@@ -397,7 +419,7 @@ async function executeTask(args: {
       }
     );
     const persisted = await persistSession({
-      existingSession: args.existingSession,
+      existingSession: session,
       input: {
         config: resolvedConfig,
         context: state.context,
@@ -438,7 +460,7 @@ async function executeTask(args: {
       });
       const summary = error.approval.summary;
       const pausedSession = await persistSession({
-        existingSession: args.existingSession,
+        existingSession: session,
         input: {
           config: resolvedConfig,
           context: state.context,
@@ -485,7 +507,7 @@ async function executeTask(args: {
 
       recordSystemNote(state, error.message);
       const failedSession = await persistSession({
-        existingSession: args.existingSession,
+        existingSession: session,
         input: {
           config: resolvedConfig,
           context: state.context,
@@ -522,7 +544,7 @@ async function executeTask(args: {
     if (error instanceof Error) {
       recordSystemNote(state, error.message);
       const failedSession = await persistSession({
-        existingSession: args.existingSession,
+        existingSession: session,
         input: {
           config: resolvedConfig,
           context: state.context,
@@ -559,7 +581,11 @@ async function executeTask(args: {
 
 async function loadLatestResumableSession(homeDir: string | undefined): Promise<SessionRecord | null> {
   const sessions = await listRecentSessions(50, homeDir);
-  return sessions.find((session) => session.status === "paused") ?? sessions[0] ?? null;
+  return (
+    sessions.find((session) => session.status === "paused") ??
+    sessions.find((session) => session.status !== "running") ??
+    null
+  );
 }
 
 async function executePendingAction(args: {
@@ -725,7 +751,7 @@ async function persistSession(args: {
     prompt: string;
     repoContext: SessionRecord["repoContext"];
     state: SessionRecord["state"];
-    status: "completed" | "failed" | "paused";
+    status: "completed" | "failed" | "paused" | "running";
     summary: string;
     turns: SessionRecord["turns"];
   };

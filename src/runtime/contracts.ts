@@ -223,7 +223,7 @@ export const executionSnapshotSchema = z.object({
   verification: verificationSchema
 });
 export const sessionModeSchema = z.enum(["interactive", "exec"]);
-export const sessionStatusSchema = z.enum(["completed", "failed", "paused"]);
+export const sessionStatusSchema = z.enum(["completed", "failed", "paused", "running"]);
 export const sessionConfigSchema = z
   .object({
     approvalPolicy: z.enum(["auto", "prompt", "never"]).optional(),

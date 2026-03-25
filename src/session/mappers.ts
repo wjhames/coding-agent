@@ -24,7 +24,12 @@ export function resultFromSession(session: SessionRecord): CommandResult {
     artifacts: session.state.artifacts,
     changedFiles: session.state.changedFiles,
     context: session.context,
-    exitCode: session.status === "paused" ? 2 : session.status === "completed" ? 0 : 1,
+    exitCode:
+      session.status === "paused" || session.status === "running"
+        ? 2
+        : session.status === "completed"
+          ? 0
+          : 1,
     guidance: session.guidance,
     nextActions: session.state.nextActions,
     observations: session.state.observations,
